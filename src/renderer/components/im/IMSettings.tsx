@@ -266,6 +266,12 @@ const IMSettings: React.FC = () => {
       setWecomQuickSetupStatus('success');
     } catch (error: unknown) {
       if (!isMountedRef.current) return;
+      // Roll back optimistic Redux dispatch so UI matches persisted state
+      dispatch(setWecomConfig({
+        botId: wecomOpenClawConfig.botId,
+        secret: wecomOpenClawConfig.secret,
+        enabled: wecomOpenClawConfig.enabled,
+      }));
       setWecomQuickSetupStatus('error');
       const err = error as { message?: string; code?: string };
       setWecomQuickSetupError(err.message || err.code || 'Unknown error');
@@ -385,60 +391,36 @@ const IMSettings: React.FC = () => {
     setTogglingPlatform(platform);
 
     try {
-      // Telegram has a separate config path
+      // Telegram runs via OpenClaw; im:config:set handler already calls
+      // syncOpenClawConfig({ restartGatewayIfRunning: true }), so no startGateway/stopGateway needed.
       if (platform === 'telegram') {
         const newEnabled = !tgOpenClawConfig.enabled;
         dispatch(setTelegramOpenClawConfig({ enabled: newEnabled }));
+        if (newEnabled) dispatch(clearError());
         await imService.updateConfig({ telegram: { ...tgOpenClawConfig, enabled: newEnabled } });
-
-        if (newEnabled) {
-          dispatch(clearError());
-          const success = await imService.startGateway(platform);
-          if (!success) {
-            dispatch(setTelegramOpenClawConfig({ enabled: false }));
-            await imService.updateConfig({ telegram: { ...tgOpenClawConfig, enabled: false } });
-          }
-        } else {
-          await imService.stopGateway(platform);
-        }
+        await imService.loadStatus();
         return;
       }
 
-      // Feishu has a separate config path (OpenClaw mode)
+      // Feishu runs via OpenClaw; im:config:set handler already calls
+      // syncOpenClawConfig({ restartGatewayIfRunning: true }), so no startGateway/stopGateway needed.
       if (platform === 'feishu') {
         const newEnabled = !fsOpenClawConfig.enabled;
         dispatch(setFeishuConfig({ enabled: newEnabled }));
+        if (newEnabled) dispatch(clearError());
         await imService.updateConfig({ feishu: { ...fsOpenClawConfig, enabled: newEnabled } });
-
-        if (newEnabled) {
-          dispatch(clearError());
-          const success = await imService.startGateway(platform);
-          if (!success) {
-            dispatch(setFeishuConfig({ enabled: false }));
-            await imService.updateConfig({ feishu: { ...fsOpenClawConfig, enabled: false } });
-          }
-        } else {
-          await imService.stopGateway(platform);
-        }
+        await imService.loadStatus();
         return;
       }
 
-      // QQ has a separate config path (OpenClaw mode)
+      // QQ runs via OpenClaw; im:config:set handler already calls
+      // syncOpenClawConfig({ restartGatewayIfRunning: true }), so no startGateway/stopGateway needed.
       if (platform === 'qq') {
         const newEnabled = !qqOpenClawConfig.enabled;
         dispatch(setQQConfig({ enabled: newEnabled }));
+        if (newEnabled) dispatch(clearError());
         await imService.updateConfig({ qq: { ...qqOpenClawConfig, enabled: newEnabled } });
-
-        if (newEnabled) {
-          dispatch(clearError());
-          const success = await imService.startGateway(platform);
-          if (!success) {
-            dispatch(setQQConfig({ enabled: false }));
-            await imService.updateConfig({ qq: { ...qqOpenClawConfig, enabled: false } });
-          }
-        } else {
-          await imService.stopGateway(platform);
-        }
+        await imService.loadStatus();
         return;
       }
 
@@ -567,36 +549,61 @@ const IMSettings: React.FC = () => {
     // For Telegram, persist telegram config and test
     if (platform === 'telegram') {
       await imService.updateConfig({ telegram: tgOpenClawConfig });
-      await runConnectivityTest(platform, {
+      const result = await runConnectivityTest(platform, {
         telegram: tgOpenClawConfig,
       } as Partial<IMGatewayConfig>);
+      // Auto-enable: if OFF and auth_check passed, turn on automatically
+      if (!tgOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
       return;
     }
 
     // For QQ, persist qq config and test (OpenClaw mode)
     if (platform === 'qq') {
       await imService.updateConfig({ qq: qqOpenClawConfig });
-      await runConnectivityTest(platform, {
+      const result = await runConnectivityTest(platform, {
         qq: qqOpenClawConfig,
       } as Partial<IMGatewayConfig>);
+      if (!qqOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
       return;
     }
 
     // For WeCom, persist wecom config and test (OpenClaw mode)
     if (platform === 'wecom') {
       await imService.updateConfig({ wecom: wecomOpenClawConfig });
-      await runConnectivityTest(platform, {
+      const result = await runConnectivityTest(platform, {
         wecom: wecomOpenClawConfig,
       } as Partial<IMGatewayConfig>);
+      if (!wecomOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
       return;
     }
 
     // For Feishu, persist feishu config and test (OpenClaw mode)
     if (platform === 'feishu') {
       await imService.updateConfig({ feishu: fsOpenClawConfig });
-      await runConnectivityTest(platform, {
+      const result = await runConnectivityTest(platform, {
         feishu: fsOpenClawConfig,
       } as Partial<IMGatewayConfig>);
+      if (!fsOpenClawConfig.enabled && result) {
+        const authCheck = result.checks.find((c) => c.code === 'auth_check');
+        if (authCheck && authCheck.level === 'pass') {
+          toggleGateway(platform);
+        }
+      }
       return;
     }
 
@@ -612,10 +619,13 @@ const IMSettings: React.FC = () => {
     // (stop main → probe with temp instance → restart main) under a mutex,
     // so doing stop/start here would cause a race condition and potential crash.
     if (isEnabled && platform !== 'nim') {
-      // Gateway is ON: restart it to pick up the latest credentials, then run the
-      // gateway_running check (which also calls runAuthProbe internally via testGateway).
-      await imService.stopGateway(platform);
-      await imService.startGateway(platform);
+      // For non-OpenClaw platforms (xiaomifeng), restart gateway to pick up latest credentials.
+      // OpenClaw platforms (dingtalk, discord, etc.) are already restarted by im:config:set handler
+      // via syncOpenClawConfig({ restartGatewayIfRunning: true }), so stop/start is redundant.
+      if (platform === 'xiaomifeng') {
+        await imService.stopGateway(platform);
+        await imService.startGateway(platform);
+      }
     }
     // When the gateway is OFF we skip stop/start entirely.
     // The main process testGateway → runAuthProbe will spawn an isolated
