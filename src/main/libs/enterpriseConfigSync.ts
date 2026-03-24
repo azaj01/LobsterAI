@@ -453,3 +453,51 @@ function syncMcpServers(
     console.error('[Enterprise] failed to sync MCP servers:', error);
   }
 }
+
+/**
+ * Deep merge source into target. Source values win on conflict.
+ * Arrays are replaced (not concatenated).
+ */
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...target };
+  for (const key of Object.keys(source)) {
+    const srcVal = source[key];
+    const tgtVal = result[key];
+    if (
+      srcVal && typeof srcVal === 'object' && !Array.isArray(srcVal) &&
+      tgtVal && typeof tgtVal === 'object' && !Array.isArray(tgtVal)
+    ) {
+      result[key] = deepMerge(tgtVal as Record<string, unknown>, srcVal as Record<string, unknown>);
+    } else {
+      result[key] = srcVal;
+    }
+  }
+  return result;
+}
+
+/**
+ * Merge enterprise openclaw.json fields into the runtime-generated openclaw.json.
+ * Called AFTER openclawConfigSync generates the runtime config.
+ * Enterprise values override generated values; fields not in enterprise config are preserved.
+ */
+export function mergeEnterpriseOpenclawConfig(runtimeConfigPath: string): void {
+  const enterprisePath = resolveEnterpriseConfigPath();
+  if (!enterprisePath) return;
+
+  const enterpriseOpenclawPath = path.join(enterprisePath, 'openclaw.json');
+  if (!fs.existsSync(enterpriseOpenclawPath) || !fs.existsSync(runtimeConfigPath)) return;
+
+  try {
+    const runtimeRaw = fs.readFileSync(runtimeConfigPath, 'utf-8');
+    const runtimeConfig = JSON.parse(runtimeRaw) as Record<string, unknown>;
+
+    const enterpriseRaw = fs.readFileSync(enterpriseOpenclawPath, 'utf-8');
+    const enterpriseConfig = JSON.parse(enterpriseRaw) as Record<string, unknown>;
+
+    const merged = deepMerge(runtimeConfig, enterpriseConfig);
+    fs.writeFileSync(runtimeConfigPath, JSON.stringify(merged, null, 2), 'utf-8');
+    console.log('[Enterprise] merged enterprise openclaw.json into runtime config');
+  } catch (error) {
+    console.error('[Enterprise] failed to merge enterprise openclaw.json:', error);
+  }
+}

@@ -68,7 +68,7 @@ import { getServerApiBaseUrl, refreshEndpointsTestMode } from './libs/endpoints'
 import { McpBridgeServer } from './libs/mcpBridgeServer';
 import type { McpBridgeConfig } from './libs/openclawConfigSync';
 import { downloadUpdate, installUpdate, cancelActiveDownload } from './libs/appUpdateInstaller';
-import { resolveEnterpriseConfigPath, syncEnterpriseConfig } from './libs/enterpriseConfigSync';
+import { resolveEnterpriseConfigPath, syncEnterpriseConfig, mergeEnterpriseOpenclawConfig } from './libs/enterpriseConfigSync';
 import { initLogger, getLogFilePath, getRecentMainLogEntries } from './logger';
 import { getCoworkLogPath } from './libs/coworkLogger';
 import { exportLogsZip } from './libs/logExport';
@@ -947,6 +947,12 @@ const syncOpenClawConfig = async (
       error: syncResult.error,
     };
   }
+
+  // After every successful config sync, merge enterprise openclaw.json
+  // fields into the generated runtime config. Enterprise values win.
+  try {
+    mergeEnterpriseOpenclawConfig(getOpenClawEngineManager().getConfigPath());
+  } catch { /* non-critical */ }
 
   // Update secret env vars so the gateway process receives the latest
   // plaintext credentials via environment variables (openclaw.json only
