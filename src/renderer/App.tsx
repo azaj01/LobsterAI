@@ -47,6 +47,9 @@ const App: React.FC = () => {
   const [downloadProgress, setDownloadProgress] = useState<AppUpdateDownloadProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [privacyAgreed, setPrivacyAgreed] = useState<boolean | null>(null);
+  const [enterpriseConfig, setEnterpriseConfig] = useState<{
+    ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
+  } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const hasInitialized = useRef(false);
   const dispatch = useDispatch();
@@ -94,7 +97,11 @@ const App: React.FC = () => {
         // 初始化配置
         console.info('[App] initializeApp: configService.init');
         await waitWithTimeout(configService.init(), 5000, 'configService.init');
-        
+
+        // Load enterprise config if present
+        const entConfig = await window.electron.enterprise.getConfig();
+        setEnterpriseConfig(entConfig);
+
         // 初始化主题
         console.info('[App] initializeApp: themeService.initialize');
         themeService.initialize();
@@ -621,6 +628,7 @@ const App: React.FC = () => {
               initialTab={settingsOptions.initialTab}
               notice={settingsOptions.notice}
               onUpdateFound={handleUpdateFound}
+              enterpriseConfig={enterpriseConfig}
             />
           )}
         </div>
@@ -657,6 +665,7 @@ const App: React.FC = () => {
                 onToggleSidebar={handleToggleSidebar}
                 onNewChat={handleNewChat}
                 updateBadge={isSidebarCollapsed ? updateBadge : null}
+                readOnly={enterpriseConfig?.ui?.skills === 'readonly'}
               />
             ) : mainView === 'scheduledTasks' ? (
               <ScheduledTasksView
@@ -701,6 +710,7 @@ const App: React.FC = () => {
           initialTab={settingsOptions.initialTab}
           notice={settingsOptions.notice}
           onUpdateFound={handleUpdateFound}
+          enterpriseConfig={enterpriseConfig}
         />
       )}
       {showUpdateModal && updateInfo && (

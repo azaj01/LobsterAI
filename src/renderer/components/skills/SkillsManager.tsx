@@ -24,7 +24,11 @@ import SkillSecurityReport from './SkillSecurityReport';
 
 type SkillTab = 'installed' | 'marketplace';
 
-const SkillsManager: React.FC = () => {
+interface SkillsManagerProps {
+  readOnly?: boolean;
+}
+
+const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly }) => {
   const dispatch = useDispatch();
   const skills = useSelector((state: RootState) => state.skill.skills);
 
@@ -590,7 +594,7 @@ const SkillsManager: React.FC = () => {
                   </span>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  {!skill.isBuiltIn && (
+                  {!readOnly && !skill.isBuiltIn && (
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); handleRequestDeleteSkill(skill); }}
@@ -601,10 +605,12 @@ const SkillsManager: React.FC = () => {
                     </button>
                   )}
                   <div
-                    className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
+                    className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
+                      readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                    } ${
                       skill.enabled ? 'bg-primary' : 'bg-border'
                     }`}
-                    onClick={(e) => { e.stopPropagation(); handleToggleSkill(skill.id); }}
+                    onClick={(e) => { e.stopPropagation(); if (!readOnly) handleToggleSkill(skill.id); }}
                   >
                     <div
                       className={`w-3.5 h-3.5 rounded-full bg-white shadow-md transform transition-transform ${
@@ -745,7 +751,7 @@ const SkillsManager: React.FC = () => {
                           </span>
                         );
                       }
-                      return (
+                      return !readOnly ? (
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); handleInstallMarketplaceSkill(skill); }}
@@ -755,7 +761,7 @@ const SkillsManager: React.FC = () => {
                           <ArrowDownTrayIcon className="h-3.5 w-3.5" />
                           {installingSkillId === skill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
                         </button>
-                      );
+                      ) : null;
                     })()}
                   </div>
                 </div>
@@ -894,7 +900,7 @@ const SkillsManager: React.FC = () => {
                   </div>
                 );
               }
-              return (
+              return !readOnly ? (
                 <button
                   type="button"
                   onClick={() => handleInstallMarketplaceSkill(selectedMarketplaceSkill)}
@@ -904,7 +910,7 @@ const SkillsManager: React.FC = () => {
                   <ArrowDownTrayIcon className="h-4 w-4" />
                   {installingSkillId === selectedMarketplaceSkill.id ? i18nService.t('skillInstalling') : i18nService.t('skillInstall')}
                 </button>
-              );
+              ) : null;
             })()}
           </div>
         </div>
@@ -992,7 +998,7 @@ const SkillsManager: React.FC = () => {
             </div>
 
             <div className="flex items-center justify-between">
-              {!selectedSkill.isBuiltIn ? (
+              {!readOnly && !selectedSkill.isBuiltIn ? (
                 <button
                   type="button"
                   onClick={() => { setSelectedSkill(null); handleRequestDeleteSkill(selectedSkill); }}
@@ -1005,10 +1011,13 @@ const SkillsManager: React.FC = () => {
                 <div />
               )}
               <div
-                className={`w-9 h-5 rounded-full flex items-center transition-colors cursor-pointer flex-shrink-0 ${
+                className={`w-9 h-5 rounded-full flex items-center transition-colors flex-shrink-0 ${
+                  readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                } ${
                   selectedSkill.enabled ? 'bg-primary' : 'bg-border'
                 }`}
                 onClick={() => {
+                  if (readOnly) return;
                   handleToggleSkill(selectedSkill.id);
                   setSelectedSkill({ ...selectedSkill, enabled: !selectedSkill.enabled });
                 }}

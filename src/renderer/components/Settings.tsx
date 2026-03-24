@@ -57,6 +57,9 @@ export type SettingsOpenOptions = {
 interface SettingsProps extends SettingsOpenOptions {
   onClose: () => void;
   onUpdateFound?: (info: AppUpdateInfo) => void;
+  enterpriseConfig?: {
+    ui?: Record<string, 'hide' | 'disable' | 'readonly'>;
+  } | null;
 }
 
 
@@ -491,7 +494,7 @@ const ShortcutRecorder: React.FC<{ value: string; onChange: (v: string) => void 
   );
 };
 
-const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound }) => {
+const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpdateFound, enterpriseConfig }) => {
   const dispatch = useDispatch();
   // 状态
   const [activeTab, setActiveTab] = useState<TabType>(initialTab ?? 'general');
@@ -2189,17 +2192,27 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
   };
 
   // 渲染标签页
-  const sidebarTabs: { key: TabType; label: string; icon: React.ReactNode }[] = useMemo(() => [
-    { key: 'general',        label: i18nService.t('general'),        icon: <Cog6ToothIcon className="h-5 w-5" /> },
-    { key: 'coworkAgentEngine', label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
-    { key: 'model',          label: i18nService.t('model'),          icon: <CubeIcon className="h-5 w-5" /> },
-    { key: 'im',             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
-    { key: 'email',          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
-    { key: 'coworkMemory',   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
-    { key: 'coworkAgent',    label: i18nService.t('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
-    { key: 'shortcuts',      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
-    { key: 'about',          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
-  ], [language]);
+  const sidebarTabs: { key: TabType; label: string; icon: React.ReactNode }[] = useMemo(() => {
+    const allTabs = [
+      { key: 'general' as TabType,        label: i18nService.t('general'),        icon: <Cog6ToothIcon className="h-5 w-5" /> },
+      { key: 'coworkAgentEngine' as TabType, label: i18nService.t('coworkAgentEngine'), icon: <CpuChipIcon className="h-5 w-5" /> },
+      { key: 'model' as TabType,          label: i18nService.t('model'),          icon: <CubeIcon className="h-5 w-5" /> },
+      { key: 'im' as TabType,             label: i18nService.t('imBot'),          icon: <ChatBubbleLeftIcon className="h-5 w-5" /> },
+      { key: 'email' as TabType,          label: i18nService.t('emailTab'),       icon: <EnvelopeIcon className="h-5 w-5" /> },
+      { key: 'coworkMemory' as TabType,   label: i18nService.t('coworkMemoryTitle'), icon: <BrainIcon className="h-5 w-5" /> },
+      { key: 'coworkAgent' as TabType,    label: i18nService.t('coworkAgentTab'),    icon: <UserCircleIcon className="h-5 w-5" /> },
+      { key: 'shortcuts' as TabType,      label: i18nService.t('shortcuts'),      icon: <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5"><rect x="2" y="4" width="20" height="14" rx="2" /><line x1="6" y1="8" x2="8" y2="8" /><line x1="10" y1="8" x2="12" y2="8" /><line x1="14" y1="8" x2="16" y2="8" /><line x1="6" y1="12" x2="8" y2="12" /><line x1="10" y1="12" x2="14" y2="12" /><line x1="16" y1="12" x2="18" y2="12" /><line x1="8" y1="15.5" x2="16" y2="15.5" /></svg> },
+      { key: 'about' as TabType,          label: i18nService.t('about'),          icon: <InformationCircleIcon className="h-5 w-5" /> },
+    ];
+    // Filter out tabs hidden by enterprise config
+    // Filter out tabs with 'hide' action in enterprise config
+    // e.g., ui: { "settings.im": "hide" } → hide the 'im' tab
+    const ui = enterpriseConfig?.ui;
+    if (ui) {
+      return allTabs.filter(tab => ui[`settings.${tab.key}`] !== 'hide');
+    }
+    return allTabs;
+  }, [language, enterpriseConfig]);
 
   const activeTabLabel = useMemo(() => {
     return sidebarTabs.find(t => t.key === activeTab)?.label ?? '';
@@ -3410,6 +3423,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                 <span className="text-sm text-foreground">{i18nService.t('aboutVersion')}</span>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-secondary">{appVersion}</span>
+                  {enterpriseConfig?.ui?.update !== 'disable' && (
                   <button
                     type="button"
                     disabled={updateCheckStatus === 'checking'}
@@ -3424,6 +3438,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, onUpda
                     {updateCheckStatus === 'error' && i18nService.t('updateCheckFailed')}
                     {updateCheckStatus === 'idle' && i18nService.t('checkForUpdate')}
                   </button>
+                  )}
+                  {enterpriseConfig?.ui?.update === 'disable' && (
+                  <span className="text-xs text-claude-textSecondary dark:text-claude-darkTextSecondary">
+                    {i18nService.t('settings.enterprise.managed')}
+                  </span>
+                  )}
                 </div>
               </div>
               <div className="flex items-center justify-between px-4 py-3 border-b border-border">

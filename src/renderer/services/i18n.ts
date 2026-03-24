@@ -1189,6 +1189,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: '网易有道LobsterAI服务协议',
     privacyDialogAccept: '我已阅读并同意',
     privacyDialogReject: '拒绝',
+
+    'settings.enterprise.managed': '由企业统一管理',
   },
   en: {
     // Common
@@ -2372,6 +2374,8 @@ const translations: Record<LanguageType, Record<string, string>> = {
     privacyDialogLinkText: 'NetEase Youdao LobsterAI Terms of Service',
     privacyDialogAccept: 'I have read and agree',
     privacyDialogReject: 'Decline',
+
+    'settings.enterprise.managed': 'Managed by enterprise',
   }
 };
 
