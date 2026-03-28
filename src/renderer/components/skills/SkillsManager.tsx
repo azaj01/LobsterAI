@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import {
   ArrowDownTrayIcon,
-  ArrowPathIcon,
   CheckCircleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import { ArrowPathIcon } from '@heroicons/react/20/solid';
 import SearchIcon from '../icons/SearchIcon';
 import PlusCircleIcon from '../icons/PlusCircleIcon';
 import UploadIcon from '../icons/UploadIcon';
@@ -53,8 +53,8 @@ const SkillsManager: React.FC = () => {
     current: number;
     currentSkillName: string;
     currentSkillVersion: string;
-    cancelled: boolean;
   } | null>(null);
+  const upgradeCancelledRef = useRef(false);
 
   const addSkillMenuRef = useRef<HTMLDivElement>(null);
   const addSkillButtonRef = useRef<HTMLButtonElement>(null);
@@ -319,7 +319,6 @@ const SkillsManager: React.FC = () => {
       current: 1,
       currentSkillName: skill.name,
       currentSkillVersion: skill.version,
-      cancelled: false,
     });
     try {
       const result = await skillService.upgradeSkill(skill.id, skill.url);
@@ -347,30 +346,32 @@ const SkillsManager: React.FC = () => {
   const handleUpgradeAll = async () => {
     if (upgradeState?.isActive || updatableSkills.length === 0) return;
     setSkillActionError('');
+    upgradeCancelledRef.current = false;
 
     const toUpdate = [...updatableSkills];
-    const state = {
+    setUpgradeState({
       isActive: true,
       total: toUpdate.length,
       current: 0,
       currentSkillName: '',
       currentSkillVersion: '',
-      cancelled: false,
-    };
-    setUpgradeState(state);
+    });
 
     for (let i = 0; i < toUpdate.length; i++) {
-      if (state.cancelled) break;
+      if (upgradeCancelledRef.current) break;
       const skill = toUpdate[i];
-      state.current = i + 1;
-      state.currentSkillName = skill.name;
-      state.currentSkillVersion = skill.version;
-      setUpgradeState({ ...state });
+      setUpgradeState({
+        isActive: true,
+        total: toUpdate.length,
+        current: i + 1,
+        currentSkillName: skill.name,
+        currentSkillVersion: skill.version,
+      });
 
       try {
         const result = await skillService.upgradeSkill(skill.id, skill.url);
         if (!result.success) {
-          console.warn(`[SkillsManager] upgrade failed for ${skill.id}:`, result.error);
+          console.warn('[SkillsManager] upgrade failed for', skill.id, result.error);
           continue;
         }
         if (result.auditReport && result.pendingInstallId) {
@@ -382,8 +383,8 @@ const SkillsManager: React.FC = () => {
         if (result.skills) {
           dispatch(setSkills(result.skills));
         }
-      } catch {
-        console.warn(`[SkillsManager] upgrade threw for ${skill.id}`);
+      } catch (error) {
+        console.warn('[SkillsManager] upgrade threw for', skill.id, error);
       }
     }
 
@@ -648,7 +649,7 @@ const SkillsManager: React.FC = () => {
                         disabled={upgradeState?.isActive === true}
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-lg bg-amber-500 text-white hover:bg-amber-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <ArrowPathIcon className="h-3 w-3" />
+                        <ArrowPathIcon className="h-3.5 w-3.5" />
                         {i18nService.t('skillUpgrade')}
                       </button>
                     );
@@ -1159,7 +1160,7 @@ const SkillsManager: React.FC = () => {
               {upgradeState.total > 1 && (
                 <button
                   type="button"
-                  onClick={() => setUpgradeState(prev => prev ? { ...prev, cancelled: true } : null)}
+                  onClick={() => { upgradeCancelledRef.current = true; }}
                   className="px-4 py-1.5 text-xs rounded-lg border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkTextSecondary text-claude-textSecondary dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover transition-colors"
                 >
                   {i18nService.t('skillUpgradeCancel')}

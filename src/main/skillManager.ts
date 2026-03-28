@@ -1090,6 +1090,7 @@ export class SkillManager {
     isUpgrade?: boolean;
     existingSkillDir?: string;
   }>();
+  private upgradingSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
 
@@ -1120,17 +1121,21 @@ export class SkillManager {
         const originalName = entry.replace(/\.upgrading$/, '');
         const originalDir = path.join(root, originalName);
 
-        if (fs.existsSync(originalDir) && fs.existsSync(path.join(originalDir, SKILL_FILE_NAME))) {
-          // Upgrade completed successfully, clean up backup
-          console.log(`[SkillManager] cleaning up completed upgrade backup: ${entry}`);
-          fs.rmSync(backupDir, { recursive: true, force: true });
-        } else {
-          // Upgrade was interrupted, roll back
-          console.log(`[SkillManager] rolling back interrupted upgrade: ${entry} → ${originalName}`);
-          if (fs.existsSync(originalDir)) {
-            fs.rmSync(originalDir, { recursive: true, force: true });
+        try {
+          if (fs.existsSync(originalDir) && fs.existsSync(path.join(originalDir, SKILL_FILE_NAME))) {
+            // Upgrade completed successfully, clean up backup
+            console.log(`[SkillManager] cleaning up completed upgrade backup: ${entry}`);
+            fs.rmSync(backupDir, { recursive: true, force: true });
+          } else {
+            // Upgrade was interrupted, roll back
+            console.log(`[SkillManager] rolling back interrupted upgrade: ${entry} → ${originalName}`);
+            if (fs.existsSync(originalDir)) {
+              fs.rmSync(originalDir, { recursive: true, force: true });
+            }
+            fs.renameSync(backupDir, originalDir);
           }
-          fs.renameSync(backupDir, originalDir);
+        } catch (error) {
+          console.warn(`[SkillManager] failed to recover upgrade for ${entry}:`, error);
         }
       }
     } catch (error) {
@@ -1581,6 +1586,11 @@ export class SkillManager {
     auditReport?: SkillSecurityReport;
     pendingInstallId?: string;
   }> {
+    // Prevent concurrent upgrades of the same skill
+    if (this.upgradingSkillIds.has(skillId)) {
+      return { success: false, error: `Skill "${skillId}" is already being upgraded` };
+    }
+
     // Find the installed skill
     const installedSkills = this.listSkills();
     const installed = installedSkills.find(s => s.id === skillId);
@@ -1593,9 +1603,23 @@ export class SkillManager {
       return { success: false, error: `Skill directory not found: ${existingSkillDir}` };
     }
 
-    let cleanupPath: string | null = null;
+    this.upgradingSkillIds.add(skillId);
     try {
-      console.log(`[SkillManager] upgradeSkill: id="${skillId}", url="${downloadUrl}"`);
+      return await this.performUpgradeDownload(skillId, downloadUrl, existingSkillDir);
+    } finally {
+      this.upgradingSkillIds.delete(skillId);
+    }
+  }
+
+  private async performUpgradeDownload(skillId: string, downloadUrl: string, existingSkillDir: string): Promise<{
+    success: boolean;
+    skills?: SkillRecord[];
+    error?: string;
+    auditReport?: SkillSecurityReport;
+    pendingInstallId?: string;
+  }> {    let cleanupPath: string | null = null;
+    try {
+      console.log(`[SkillManager] starting upgrade for skill "${skillId}"`);
       const root = this.ensureSkillsRoot();
 
       // Download new version (reuse downloadSkill's download logic)
@@ -1688,6 +1712,8 @@ export class SkillManager {
           existingSkillDir,
         });
 
+        // Ownership of cleanupPath transferred to pendingInstalls
+        cleanupPath = null;
         return { success: true, auditReport, pendingInstallId: pendingId };
       }
 
@@ -1724,15 +1750,25 @@ export class SkillManager {
     // Atomic rename old dir to .upgrading backup
     fs.renameSync(existingSkillDir, upgradingDir);
 
-    // Copy new version to original path
-    cpRecursiveSync(newSkillDir, existingSkillDir);
+    try {
+      // Copy new version to original path
+      cpRecursiveSync(newSkillDir, existingSkillDir);
 
-    // Restore .env and _meta.json
-    if (envBackup !== null) {
-      fs.writeFileSync(path.join(existingSkillDir, '.env'), envBackup);
-    }
-    if (metaBackup !== null) {
-      fs.writeFileSync(path.join(existingSkillDir, '_meta.json'), metaBackup);
+      // Restore .env and _meta.json
+      if (envBackup !== null) {
+        fs.writeFileSync(path.join(existingSkillDir, '.env'), envBackup);
+      }
+      if (metaBackup !== null) {
+        fs.writeFileSync(path.join(existingSkillDir, '_meta.json'), metaBackup);
+      }
+    } catch (error) {
+      // Roll back: remove partial new dir and restore backup
+      console.error('[SkillManager] upgrade copy failed, rolling back:', error);
+      if (fs.existsSync(existingSkillDir)) {
+        fs.rmSync(existingSkillDir, { recursive: true, force: true });
+      }
+      fs.renameSync(upgradingDir, existingSkillDir);
+      throw error;
     }
 
     // Remove backup
