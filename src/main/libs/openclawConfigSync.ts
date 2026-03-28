@@ -28,8 +28,24 @@ const mapExecutionModeToSandboxMode = (_mode: CoworkExecutionMode): 'off' | 'non
  */
 export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
 
-const mapApiTypeToOpenClawApi = (apiType: 'anthropic' | 'openai' | undefined): 'anthropic-messages' | 'openai-completions' => {
-  return apiType === 'openai' ? 'openai-completions' : 'anthropic-messages';
+function shouldUseOpenAIResponsesApi(providerName?: string, baseURL?: string): boolean {
+  if (providerName !== 'openai') return false;
+  if (!baseURL) return true;
+  const normalized = baseURL.trim().toLowerCase();
+  return !normalized || normalized.includes('api.openai.com');
+}
+
+const mapApiTypeToOpenClawApi = (
+  apiType: 'anthropic' | 'openai' | undefined,
+  providerName?: string,
+  baseURL?: string,
+): OpenClawProviderApi => {
+  if (apiType === 'openai') {
+    return shouldUseOpenAIResponsesApi(providerName, baseURL)
+      ? 'openai-responses'
+      : 'openai-completions';
+  }
+  return 'anthropic-messages';
 };
 
 const ensureDir = (dirPath: string): void => {
@@ -222,7 +238,7 @@ const sessionSnapshotContainsDisabledManagedSkill = (entry: Record<string, unkno
   return DISABLED_MANAGED_SKILL_NAMES.some((name) => prompt.includes(`<name>${name}</name>`));
 };
 
-type OpenClawProviderApi = 'anthropic-messages' | 'openai-completions';
+type OpenClawProviderApi = 'anthropic-messages' | 'openai-completions' | 'openai-responses' | 'google-generative-ai';
 
 type OpenClawProviderSelection = {
   providerId: string;
@@ -301,6 +317,18 @@ const normalizeKimiCodingBaseUrl = (rawBaseUrl: string): string => {
   return normalizeBaseUrlPath(trimmed, '/coding');
 };
 
+const normalizeGeminiBaseUrl = (rawBaseUrl: string): string => {
+  const trimmed = rawBaseUrl.trim();
+  if (!trimmed) {
+    return 'https://generativelanguage.googleapis.com/v1beta/openai';
+  }
+  const normalized = trimmed.replace(/\/+$/, '');
+  if (normalized.endsWith('/openai')) {
+    return normalized.slice(0, -'/openai'.length);
+  }
+  return normalized;
+};
+
 const buildProviderSelection = (options: {
   apiKey: string;
   baseURL: string;
@@ -311,7 +339,7 @@ const buildProviderSelection = (options: {
   supportsImage?: boolean;
 }): OpenClawProviderSelection => {
   const providerModelName = normalizeModelName(options.modelId);
-  const providerApi = mapApiTypeToOpenClawApi(options.apiType);
+  const providerApi = mapApiTypeToOpenClawApi(options.apiType, options.providerName, options.baseURL);
   const modelInput: string[] = options.supportsImage ? ['text', 'image'] : ['text'];
   const providerName = options.providerName ?? '';
   const codingPlanEnabled = !!options.codingPlanEnabled;
@@ -407,6 +435,29 @@ const buildProviderSelection = (options: {
             maxTokens: 8192,
           },
         ],
+      },
+    };
+  }
+
+  if (providerName === 'gemini') {
+    const geminiApi: OpenClawProviderApi = 'google-generative-ai';
+    return {
+      providerId: 'google',
+      legacyModelId: options.modelId,
+      sessionModelId: options.modelId,
+      primaryModel: `google/${options.modelId}`,
+      providerConfig: {
+        baseUrl: normalizeGeminiBaseUrl(options.baseURL),
+        api: geminiApi,
+        apiKey: `\${${providerApiKeyEnvVar(providerName)}}`,
+        auth: 'api-key',
+        models: [{
+          id: options.modelId,
+          name: providerModelName,
+          api: geminiApi,
+          input: modelInput,
+          reasoning: true,
+        }],
       },
     };
   }
