@@ -631,6 +631,15 @@ const CoworkPromptInput = React.forwardRef<CoworkPromptInputRef, CoworkPromptInp
     () => configService.getConfig().shortcuts?.sendMessage ?? 'Enter'
   );
 
+  // Sync when config is updated elsewhere (e.g. Settings panel)
+  useEffect(() => {
+    const syncFromConfig = () => {
+      const latest = configService.getConfig().shortcuts?.sendMessage ?? 'Enter';
+      setCurrentSendShortcut(latest);
+    };
+    window.addEventListener('config-updated', syncFromConfig);
+    return () => window.removeEventListener('config-updated', syncFromConfig);
+  }, []);
   useEffect(() => {
     if (!showSendShortcutMenu) return;
     const handleClickOutside = (e: MouseEvent) => {
