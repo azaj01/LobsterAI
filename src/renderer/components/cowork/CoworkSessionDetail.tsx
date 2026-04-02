@@ -1026,18 +1026,6 @@ export const UserMessageItem: React.FC<{
                 )}
               </div>
               <div className="flex items-center justify-end gap-1.5 mt-1">
-                {messageSkills.map(skill => (
-                  <div
-                    key={skill.id}
-                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-primary-muted"
-                    title={skill.description}
-                  >
-                    <PuzzleIcon className="h-2.5 w-2.5 text-primary" />
-                    <span className="text-[10px] font-medium text-primary max-w-[60px] truncate">
-                      {skill.name}
-                    </span>
-                  </div>
-                ))}
                 {onReEdit && (
                   <ReEditButton
                     visible={isHovered}
@@ -1048,6 +1036,22 @@ export const UserMessageItem: React.FC<{
                   content={message.content}
                   visible={isHovered}
                 />
+                {messageSkills.length > 0 && (
+                  <div className="flex items-center gap-1.5 mr-1.5">
+                    {messageSkills.map(skill => (
+                      <div
+                        key={skill.id}
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-primary-muted"
+                        title={skill.description}
+                      >
+                        <PuzzleIcon className="h-2.5 w-2.5 text-primary" />
+                        <span className="text-[10px] font-medium text-primary max-w-[60px] truncate">
+                          {skill.name}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
