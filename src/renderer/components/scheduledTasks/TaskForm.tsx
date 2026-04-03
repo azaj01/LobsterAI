@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { PlatformRegistry } from '@shared/platform';
 import type { Model } from '../../store/slices/modelSlice';
 import { RootState } from '../../store';
 import { i18nService } from '../../services/i18n';
@@ -11,6 +10,7 @@ import type {
   ScheduledTaskConversationOption,
   ScheduledTaskInput,
 } from '../../../scheduledTask/types';
+import { PlatformRegistry } from '@shared/platform';
 import ModelSelector from '../ModelSelector';
 import { formatScheduleLabel, type PlanType, scheduleToPlanInfo } from './utils';
 import { ProviderRegistry, OpenClawProviderId } from '@shared/providers/constants';
