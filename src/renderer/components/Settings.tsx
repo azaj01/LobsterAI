@@ -1,5 +1,5 @@
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, KeyIcon, ShieldCheckIcon, SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -1298,8 +1298,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             minimax: {
               ...prev.minimax,
               enabled: true,
-              apiKey: tokenPayload.access_token!,
-              baseUrl,
+              oauthAccessToken: tokenPayload.access_token!,
+              oauthBaseUrl: baseUrl,
               apiFormat: 'anthropic',
               authType: 'oauth',
               oauthRefreshToken: tokenPayload.refresh_token,
@@ -1334,7 +1334,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       ...prev,
       minimax: {
         ...prev.minimax,
-        apiKey: '',
+        oauthAccessToken: undefined,
+        oauthBaseUrl: undefined,
         oauthRefreshToken: undefined,
         oauthTokenExpiresAt: undefined,
       },
@@ -1665,16 +1666,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       let apiKeyToUse = primaryProvider.apiKey;
       let baseUrlToUse = primaryProvider.baseUrl;
 
-      // For Qwen provider, check if OAuth should be used
-      if (firstEnabledProvider && firstEnabledProvider[0] === 'qwen') {
-        const qwenConfig = firstEnabledProvider[1] as ProvidersConfig['qwen'];
-        if (!qwenConfig.apiKey && qwenConfig.oauthCredentials) {
-          // Use OAuth token as API key placeholder
-          apiKeyToUse = 'qwen-oauth';
-          baseUrlToUse = qwenConfig.oauthCredentials.resourceUrl || qwenConfig.baseUrl;
-        }
-      }
-
       apiService.setConfig({
         apiKey: apiKeyToUse,
         baseUrl: baseUrlToUse,
@@ -1922,9 +1913,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setIsTestResultModalOpen(false);
     setTestResult(null);
 
-    // Check if provider has valid authentication (API Key or OAuth for Qwen)
-    const hasValidAuth = providerConfig.apiKey ||
-      (testingProvider === 'qwen' && (providerConfig as ProvidersConfig['qwen']).oauthCredentials);
+    const hasValidAuth = providerConfig.apiKey;
 
     if (providerRequiresApiKey(testingProvider) && !hasValidAuth) {
       showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
@@ -3038,25 +3027,38 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               {/* MiniMax OAuth auth section */}
               {activeProvider === 'minimax' && (
                 <div className="space-y-3">
-                  {/* Auth type tabs */}
+                  {/* Auth type radio cards */}
                   <div>
-                    <div className="flex rounded-xl overflow-hidden border border-border mb-3">
-                      <button
-                        type="button"
-                        onClick={() => setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'oauth' } }))}
-                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxIsOAuthMode ? 'bg-primary text-white' : 'text-secondary hover:bg-surface-raised'}`}
-                      >
-                        {i18nService.t('minimaxOAuthTabOAuth')}
-                      </button>
+                    <p className="text-xs font-medium text-foreground mb-2">
+                      {i18nService.t('minimaxAuthMethodLabel')}
+                    </p>
+                    <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={() => {
                           setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'apikey' } }));
                           setMinimaxOAuthPhase({ kind: 'idle' });
                         }}
-                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${!minimaxIsOAuthMode ? 'bg-primary text-white' : 'text-secondary hover:bg-surface-raised'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!minimaxIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
-                        {i18nService.t('minimaxOAuthTabApiKey')}
+                        <div className="flex items-start justify-between">
+                          <KeyIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
+                          {!minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                        </div>
+                        <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabApiKey')}</p>
+                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('minimaxAuthApiKeyDesc')}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'oauth' } }))}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${minimaxIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <ShieldCheckIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
+                          {minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                        </div>
+                        <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabOAuth')}</p>
+                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('minimaxAuthOAuthDesc')}</p>
                       </button>
                     </div>
                   </div>
@@ -3115,7 +3117,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   {minimaxIsOAuthMode && (
                     <div className="space-y-2 min-h-[68px]">
                       {/* Already logged in */}
-                      {minimaxOAuthPhase.kind === 'idle' && providers.minimax.apiKey && (
+                      {minimaxOAuthPhase.kind === 'idle' && providers.minimax.oauthAccessToken && (
                         <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20 space-y-2">
                           <p className="text-xs text-green-600 dark:text-green-400 font-medium">
                             {i18nService.t('minimaxOAuthLoggedIn')}
@@ -3140,7 +3142,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       )}
 
                       {/* Not logged in yet — show region selector + login button */}
-                      {minimaxOAuthPhase.kind === 'idle' && !providers.minimax.apiKey && (
+                      {minimaxOAuthPhase.kind === 'idle' && !providers.minimax.oauthAccessToken && (
                         <div className="space-y-2">
                           <div>
                             <label className="block text-xs font-medium text-foreground mb-1">
@@ -3733,7 +3735,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey && !(activeProvider === 'qwen' && providers.qwen.oauthCredentials))}
+                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey)}
                   className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                 >
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
