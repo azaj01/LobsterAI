@@ -1,5 +1,4 @@
 import { PlatformRegistry } from '@shared/platform';
-import { OpenClawProviderId, ProviderRegistry } from '@shared/providers/constants';
 import React, { useEffect, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 

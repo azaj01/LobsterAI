@@ -1961,17 +1961,11 @@ export class CoworkStore {
     const normalizedModelId = modelId.trim();
     if (!normalizedModelId) return 0;
 
-    this.db.run(
-      'UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, \'\')) = \'\'',
-      [normalizedModelId, Date.now()],
-    );
+    const result = this.db
+      .prepare('UPDATE agents SET model = ?, updated_at = ? WHERE TRIM(COALESCE(model, \'\')) = \'\'')
+      .run(normalizedModelId, Date.now());
 
-    const changed = this.db.getRowsModified();
-    if (changed > 0) {
-      this.saveDb();
-    }
-
-    return changed;
+    return result.changes;
   }
 
   updateAgent(id: string, updates: UpdateAgentRequest): Agent | null {

@@ -17,7 +17,7 @@ class AgentService {
     try {
       const agents = await window.electron?.agents?.list();
       if (agents) {
-        store.dispatch(setAgents(agents.map((a) => ({
+        const mappedAgents = agents.map((a) => ({
           id: a.id,
           name: a.name,
           description: a.description,
@@ -27,7 +27,8 @@ class AgentService {
           isDefault: a.isDefault,
           source: a.source,
           skillIds: a.skillIds ?? [],
-        }))));
+        }));
+        store.dispatch(setAgents(mappedAgents));
       }
     } catch (error) {
       console.error('Failed to load agents:', error);

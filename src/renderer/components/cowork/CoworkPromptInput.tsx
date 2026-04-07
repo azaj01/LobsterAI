@@ -1,5 +1,5 @@
-import { ExclamationTriangleIcon,PhotoIcon } from '@heroicons/react/24/outline';
-import { FolderIcon,PaperAirplaneIcon, StopIcon } from '@heroicons/react/24/solid';
+import { CheckIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, FolderIcon, PaperAirplaneIcon, StopIcon } from '@heroicons/react/24/solid';
 import React, { useCallback,useEffect, useRef, useState } from 'react';
 import { useDispatch,useSelector } from 'react-redux';
 import { agentService } from '../../services/agent';
@@ -15,11 +15,11 @@ import { CoworkImageAttachment } from '../../types/cowork';
 import { Skill } from '../../types/skill';
 import { getCompactFolderName } from '../../utils/path';
 import { toOpenClawModelRef } from '../../utils/openclawModelRef';
+import AttachmentCard from './AttachmentCard';
 import PaperClipIcon from '../icons/PaperClipIcon';
 import XMarkIcon from '../icons/XMarkIcon';
 import ModelSelector from '../ModelSelector';
 import { ActiveSkillBadge,SkillsButton } from '../skills';
-import Tooltip from '../ui/Tooltip';
 import { resolveAgentModelSelection } from './agentModelSelection';
 import FolderSelectorPopover from './FolderSelectorPopover';
 

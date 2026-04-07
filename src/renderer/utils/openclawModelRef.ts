@@ -22,10 +22,10 @@ export function matchesOpenClawModelRef(
   return normalizedRef === model.id;
 }
 
-export function resolveOpenClawModelRef(
+export function resolveOpenClawModelRef<T extends Pick<Model, 'id' | 'providerKey' | 'isServerModel'>>(
   modelRef: string,
-  availableModels: Array<Pick<Model, 'id' | 'providerKey' | 'isServerModel'>>,
-): Pick<Model, 'id' | 'providerKey' | 'isServerModel'> | null {
+  availableModels: T[],
+): T | null {
   const normalizedRef = modelRef.trim();
   if (!normalizedRef) return null;
 
