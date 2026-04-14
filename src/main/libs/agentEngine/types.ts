@@ -1,4 +1,6 @@
 import type { PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+
+import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import type { CoworkMessage } from '../../coworkStore';
 
 export type CoworkAgentEngine = 'openclaw' | 'yd_cowork';
@@ -18,6 +20,7 @@ export interface CoworkRuntimeEvents {
   permissionRequest: (sessionId: string, request: PermissionRequest) => void;
   complete: (sessionId: string, claudeSessionId: string | null) => void;
   error: (sessionId: string, error: string) => void;
+  sessionStopped: (sessionId: string) => void;
 }
 
 export type CoworkImageAttachment = {
@@ -54,6 +57,7 @@ export interface CoworkRuntime {
   ): this;
   startSession(sessionId: string, prompt: string, options?: CoworkStartOptions): Promise<void>;
   continueSession(sessionId: string, prompt: string, options?: CoworkContinueOptions): Promise<void>;
+  patchSession?(sessionId: string, patch: OpenClawSessionPatch): Promise<void>;
   stopSession(sessionId: string): void;
   stopAllSessions(): void;
   respondToPermission(requestId: string, result: PermissionResult): void;
