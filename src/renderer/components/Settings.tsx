@@ -32,7 +32,7 @@ import PlusCircleIcon from './icons/PlusCircleIcon';
 import { GitHubCopilotIcon } from './icons/providers';
 import TrashIcon from './icons/TrashIcon';
 import IMSettings from './im/IMSettings';
-import { EmailSettings } from './settings/EmailSettings';
+import EmailSkillConfig from './skills/EmailSkillConfig';
 import ThemedSelect from './ui/ThemedSelect';
 
 type TabType = 'general'| 'coworkAgentEngine' | 'model' | 'coworkMemory' | 'coworkAgent' | 'shortcuts' | 'im' | 'email' | 'about';
@@ -2728,7 +2728,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         );
 
       case 'email':
-        return <EmailSettings />;
+        return <EmailSkillConfig />;
 
       case 'coworkAgentEngine':
         return (
