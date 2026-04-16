@@ -4,6 +4,7 @@ import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import type { OpenClawSessionPatch } from '../../../common/openclawSession';
 import type { CoworkExecutionMode, CoworkMessage, CoworkSession, CoworkSessionStatus, CoworkStore } from '../../coworkStore';
 import { t } from '../../i18n';
 import { getCommandDangerLevel,isDeleteCommand } from '../commandSafety';
@@ -200,6 +201,24 @@ const stripDiscordMentions = (text: string): string =>
 const stripFeishuSystemHeader = (text: string): string => {
   // Match: "System: [timestamp] Feishu[accountId] ..." as the first line.
   const match = text.match(/^System:\s*\[.*?\]\s+Feishu\[.*$/m);
+  if (!match) return text;
+  return text.slice(match.index! + match[0].length).replace(/^\n+/, '').trim();
+};
+
+/**
+ * Strip the POPO plugin's system header line from user messages.
+ *
+ * The moltbot-popo plugin calls enqueueSystemEvent on every inbound message,
+ * prepending a one-line header before the user's actual text:
+ *   System: [2026-04-14 19:57:42 GMT+8] POPO DM received from user@corp.com
+ *   System: [2026-04-14 19:57:42 GMT+8] POPO message received in group <id>
+ *
+ * Strip it so only the real user text is stored and displayed locally.
+ */
+const stripPopoSystemHeader = (text: string): string => {
+  // Match: "System: [timestamp] POPO DM received from ..." or
+  //        "System: [timestamp] POPO message received in group ..."
+  const match = text.match(/^System:\s*\[.*?\]\s+POPO\b.*$/m);
   if (!match) return text;
   return text.slice(match.index! + match[0].length).replace(/^\n+/, '').trim();
 };
@@ -587,6 +606,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
   private readonly pendingAgentEventsByRunId = new Map<string, AgentEventPayload[]>();
   private readonly lastChatSeqByRunId = new Map<string, number>();
   private readonly lastAgentSeqByRunId = new Map<string, number>();
+  // Tracks runIds that have received a lifecycle phase=error, so gateway retries
+  // (which reuse the same runId) don't re-create an ActiveTurn and surface duplicate errors.
+  private readonly terminatedRunIds = new Set<string>();
   private readonly pendingApprovals = new Map<string, PendingApprovalEntry>();
   private readonly pendingTurns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
   private readonly confirmationModeBySession = new Map<string, 'modal' | 'text'>();
@@ -736,6 +758,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         pinned: false,
         cwd: '',
         systemPrompt: '',
+        modelOverride: '',
         executionMode: 'local' as CoworkExecutionMode,
         activeSkillIds: [],
         messages,
@@ -834,6 +857,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         pinned: false,
         cwd: '',
         systemPrompt: '',
+        modelOverride: '',
         executionMode: 'local' as CoworkExecutionMode,
         activeSkillIds: [],
         messages,
@@ -1052,6 +1076,29 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       systemPrompt: options.systemPrompt,
       skillIds: options.skillIds,
       imageAttachments: options.imageAttachments,
+    });
+  }
+
+  async patchSession(sessionId: string, patch: OpenClawSessionPatch): Promise<void> {
+    const session = this.store.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
+    }
+
+    const activeTurnSessionKey = this.activeTurns.get(sessionId)?.sessionKey?.trim();
+    const rememberedSessionKey = this.getSessionKeysForSession(sessionId)
+      .find((key) => !isManagedSessionKey(key));
+    const agentId = session.agentId || 'main';
+    const sessionKey = activeTurnSessionKey
+      || rememberedSessionKey
+      || this.toSessionKey(sessionId, agentId);
+    this.rememberSessionKey(sessionId, sessionKey);
+    await this.ensureGatewayClientReady();
+
+    const client = this.requireGatewayClient();
+    await client.request('sessions.patch', {
+      key: sessionKey,
+      ...patch,
     });
   }
 
@@ -1962,7 +2009,9 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
     // Re-create ActiveTurn for channel session follow-up turns.
     // Exclude stream=error events (e.g. seq gap notifications) — they are diagnostic alerts,
     // not new run events, and must not create a ghost ActiveTurn that blocks the next user turn.
-    if (sessionId && !this.activeTurns.has(sessionId) && sessionKey && stream !== 'error') {
+    // Also exclude runIds that have already been terminated (lifecycle phase=error received),
+    // which prevents gateway retries from spawning new turns and surfacing duplicate errors.
+    if (sessionId && !this.activeTurns.has(sessionId) && sessionKey && stream !== 'error' && !this.terminatedRunIds.has(runId)) {
       console.log('[Debug:handleAgentEvent] re-creating ActiveTurn for follow-up turn, sessionId:', sessionId);
       this.ensureActiveTurn(sessionId, sessionKey, runId);
     }
@@ -2063,6 +2112,13 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       return;
     }
     if (stream === 'lifecycle') {
+      // Mark runId as terminated immediately on phase=error so that subsequent retries
+      // (which reuse the same runId) are blocked from re-creating an ActiveTurn.
+      const lifecycleData = agentPayload.data;
+      const lifecycleRunId = typeof agentPayload.runId === 'string' ? agentPayload.runId.trim() : '';
+      if (isRecord(lifecycleData) && typeof lifecycleData.phase === 'string' && lifecycleData.phase.trim() === 'error' && lifecycleRunId) {
+        this.terminatedRunIds.add(lifecycleRunId);
+      }
       this.handleAgentLifecycleEvent(sessionId, agentPayload.data);
     }
   }
@@ -3160,6 +3216,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         && this.channelSessionSync.isChannelSessionKey(sessionKey);
       const isDiscord = sessionKey.includes(':discord:');
       const isQQ = sessionKey.includes(':qqbot:');
+      const isPopo = sessionKey.includes(':moltbot-popo:');
       const isFeishu = sessionKey.includes(':feishu:');
 
       // Extract authoritative user/assistant entries from gateway history
@@ -3172,6 +3229,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
         if (!text) continue;
         if (isDiscord) text = stripDiscordMentions(text);
         if (isQQ && role === 'user') text = stripQQBotSystemPrompt(text);
+        if (isPopo && role === 'user') text = stripPopoSystemHeader(text);
         if (isFeishu && role === 'user') text = stripFeishuSystemHeader(text);
         authoritativeEntries.push({ role: role as 'user' | 'assistant', text });
       }
@@ -3442,6 +3500,7 @@ export class OpenClawRuntimeAdapter extends EventEmitter implements CoworkRuntim
       // POPO's moltbot-popo plugin converts newlines to HTML break tags (<br />),
       // causing raw <br /> to appear in the UI and AI conversation.
       if (isPopo) text = text.replace(/<br\s*\/?>/gi, '\n');
+      if (isPopo && role === 'user') text = stripPopoSystemHeader(text);
       if (isDiscord) text = stripDiscordMentions(text);
       if (isQQ && role === 'user') text = stripQQBotSystemPrompt(text);
       if (isFeishu && role === 'user') text = stripFeishuSystemHeader(text);

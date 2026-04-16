@@ -4,28 +4,29 @@
  */
 
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+
 import type {
-  IMGatewayConfig,
-  IMGatewayStatus,
-  DingTalkOpenClawConfig,
   DingTalkInstanceConfig,
   DingTalkMultiInstanceConfig,
-  FeishuOpenClawConfig,
+  DingTalkOpenClawConfig,
+  DiscordOpenClawConfig,
   FeishuInstanceConfig,
   FeishuMultiInstanceConfig,
-  TelegramOpenClawConfig,
-  QQOpenClawConfig,
+  FeishuOpenClawConfig,
+  IMGatewayConfig,
+  IMGatewayStatus,
+  IMSettings,
+  NeteaseBeeChanConfig,
+  NimConfig,
+  PopoOpenClawConfig,
   QQInstanceConfig,
   QQMultiInstanceConfig,
-  DiscordOpenClawConfig,
-  NimConfig,
-  NeteaseBeeChanConfig,
-  WecomOpenClawConfig,
+  QQOpenClawConfig,
+  TelegramOpenClawConfig,
   WecomInstanceConfig,
   WecomMultiInstanceConfig,
-  PopoOpenClawConfig,
+  WecomOpenClawConfig,
   WeixinOpenClawConfig,
-  IMSettings,
 } from '../../types/im';
 import {
   DEFAULT_IM_CONFIG,

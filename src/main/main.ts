@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import type { OpenClawSessionPatch } from '../common/openclawSession';
 import { buildScheduledTaskEnginePrompt } from '../scheduledTask/enginePrompt';
 import { migrateScheduledTaskRunsToOpenclaw, migrateScheduledTasksToOpenclaw } from '../scheduledTask/migrate';
 import { PlatformRegistry } from '../shared/platform';
@@ -82,6 +83,7 @@ import {
 import { getLogFilePath, getRecentMainLogEntries, initLogger } from './logger';
 import type { McpServerFormData } from './mcpStore';
 import { McpStore } from './mcpStore';
+import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 import { loadOpenClawSessionPolicyConfig, saveOpenClawSessionPolicyConfig } from './openclawSessionPolicy/store';
 import { SkillManager } from './skillManager';
@@ -118,6 +120,55 @@ const MIME_EXTENSION_MAP: Record<string, string> = {
   'text/csv': '.csv',
 };
 
+function sanitizeOptionalPatchValue(
+  value: unknown,
+  maxChars = IPC_STRING_MAX_CHARS,
+): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'string') {
+    throw new Error('Session patch value must be a string or null.');
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > maxChars) {
+    throw new Error('Session patch value is too long.');
+  }
+  return trimmed;
+}
+
+function sanitizeOpenClawSessionPatch(input: unknown): OpenClawSessionPatch {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('Invalid session patch payload.');
+  }
+
+  const source = input as Record<string, unknown>;
+  const patch: OpenClawSessionPatch = {};
+
+  const model = sanitizeOptionalPatchValue(source.model);
+  if (model !== undefined) patch.model = model;
+
+  const thinkingLevel = sanitizeOptionalPatchValue(source.thinkingLevel);
+  if (thinkingLevel !== undefined) patch.thinkingLevel = thinkingLevel;
+
+  const reasoningLevel = sanitizeOptionalPatchValue(source.reasoningLevel);
+  if (reasoningLevel !== undefined) patch.reasoningLevel = reasoningLevel;
+
+  const elevatedLevel = sanitizeOptionalPatchValue(source.elevatedLevel);
+  if (elevatedLevel !== undefined) patch.elevatedLevel = elevatedLevel;
+
+  const responseUsage = sanitizeOptionalPatchValue(source.responseUsage);
+  if (responseUsage !== undefined) patch.responseUsage = responseUsage as OpenClawSessionPatch['responseUsage'];
+
+  const sendPolicy = sanitizeOptionalPatchValue(source.sendPolicy);
+  if (sendPolicy !== undefined) patch.sendPolicy = sendPolicy as OpenClawSessionPatch['sendPolicy'];
+
+  if (Object.keys(patch).length === 0) {
+    throw new Error('Session patch is empty.');
+  }
+
+  return patch;
+}
+
 const sanitizeExportFileName = (value: string): string => {
   const sanitized = value.replace(INVALID_FILE_NAME_PATTERN, ' ').replace(/\s+/g, ' ').trim();
   return sanitized || 'cowork-session';
@@ -136,6 +187,7 @@ const resolveDefaultAgentModelRef = (): string => {
     modelId: config.model.trim(),
     apiType: config.apiType,
     providerName: apiResolution.providerMetadata?.providerName,
+    authType: apiResolution.providerMetadata?.authType,
     codingPlanEnabled: apiResolution.providerMetadata?.codingPlanEnabled,
     supportsImage: apiResolution.providerMetadata?.supportsImage,
     modelName: apiResolution.providerMetadata?.modelName,
@@ -153,6 +205,7 @@ const buildAvailableOpenClawProviders = (): Record<string, { models: Array<{ id:
         modelId: model.id,
         apiType: provider.apiType,
         providerName: provider.providerName,
+        authType: provider.authType,
         codingPlanEnabled: provider.codingPlanEnabled,
         supportsImage: model.supportsImage,
         modelName: model.name,
@@ -170,6 +223,12 @@ const buildAvailableOpenClawProviders = (): Record<string, { models: Array<{ id:
   return providerMap;
 };
 
+// Provider IDs that were renamed in past refactors. Any stored agent model ref
+// using an old ID is rewritten to the current ID on startup.
+const RENAMED_PROVIDER_IDS: Record<string, string> = {
+  'github-copilot': 'lobsterai-copilot',
+};
+
 const migrateAgentModelRefs = (): number => {
   const defaultModelRef = resolveDefaultAgentModelRef();
   if (!defaultModelRef) return 0;
@@ -179,8 +238,20 @@ const migrateAgentModelRefs = (): number => {
   let changed = 0;
 
   for (const agent of agents) {
-    const normalizedModel = agent.model.trim();
+    let normalizedModel = agent.model.trim();
     if (!normalizedModel) continue;
+
+    // Apply explicit provider rename map before qualification so that renamed
+    // provider IDs (e.g. 'github-copilot' → 'lobsterai-copilot') are corrected
+    // even though resolveQualifiedAgentModelRef treats any slash-ref as valid.
+    const slashIdx = normalizedModel.indexOf('/');
+    if (slashIdx > 0) {
+      const storedProviderId = normalizedModel.slice(0, slashIdx);
+      const renamedId = RENAMED_PROVIDER_IDS[storedProviderId];
+      if (renamedId) {
+        normalizedModel = `${renamedId}${normalizedModel.slice(slashIdx)}`;
+      }
+    }
 
     const qualification = resolveQualifiedAgentModelRef({
       agentModel: normalizedModel,
@@ -194,7 +265,7 @@ const migrateAgentModelRefs = (): number => {
       continue;
     }
 
-    if (qualification.status !== 'qualified' || qualification.primaryModel === normalizedModel) {
+    if (qualification.status !== 'qualified' || qualification.primaryModel === agent.model.trim()) {
       continue;
     }
 
@@ -3150,6 +3221,45 @@ if (!gotTheLock) {
     }
   });
 
+  ipcMain.handle(OpenClawSessionIpc.Patch, async (_event, input: unknown) => {
+    try {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        throw new Error('Invalid OpenClaw session patch input.');
+      }
+
+      const request = input as { sessionId?: unknown; patch?: unknown };
+      const sessionId = typeof request.sessionId === 'string' ? request.sessionId.trim() : '';
+      if (!sessionId) {
+        throw new Error('Session ID is required.');
+      }
+
+      const patch = sanitizeOpenClawSessionPatch(request.patch);
+      const runtime = getCoworkEngineRouter();
+      await runtime.patchSession(sessionId, patch);
+
+      if (patch.model !== undefined) {
+        getCoworkStore().updateSession(sessionId, {
+          modelOverride: patch.model ?? '',
+        });
+      }
+
+      const session = getCoworkStore().getSession(sessionId);
+      if (!session) {
+        throw new Error(`Session ${sessionId} not found`);
+      }
+
+      return {
+        success: true,
+        session,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to patch OpenClaw session',
+      };
+    }
+  });
+
   ipcMain.handle('cowork:memory:listEntries', async (_event, input: {
     query?: string;
     status?: 'created' | 'stale' | 'deleted' | 'all';
@@ -4478,52 +4588,7 @@ if (!gotTheLock) {
     return false;
   });
 
-  // Qwen OAuth 登录
-  ipcMain.handle('qwen:oauth:login', async (event) => {
-    const { startQwenOAuth } = await import('./libs/qwenOAuth');
-
-    const progressCallback = {
-      update: (message: string) => {
-        event.sender.send('qwen:oauth:progress', message);
-      },
-      stop: (message?: string) => {
-        if (message) {
-          event.sender.send('qwen:oauth:progress', message);
-        }
-      }
-    };
-
-    try {
-      const oauthToken = await startQwenOAuth(progressCallback);
-      return {
-        success: true,
-        data: oauthToken
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'OAuth login failed'
-      };
-    }
-  });
-
-  // Qwen OAuth 刷新 token
-  ipcMain.handle('qwen:oauth:refresh', async (_event, refreshToken: string) => {
-    const { refreshQwenOAuthToken } = await import('./libs/qwenOAuth');
-
-    try {
-      const oauthToken = await refreshQwenOAuthToken(refreshToken);
-      return {
-        success: true,
-        data: oauthToken
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Token refresh failed'
-      };
-    }
-  });
+  // ─── end OAuth ───
 
   // 企微 SDK 授权弹窗白名单域名
   const WECOM_AUTH_HOSTNAMES = new Set([

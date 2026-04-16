@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import { IpcChannel as ScheduledTaskIpc } from '../scheduledTask/constants';
 import type { Platform } from '../shared/platform';
+import { OpenClawSessionIpc } from './openclawSession/constants';
 import { OpenClawSessionPolicyIpc } from './openclawSessionPolicy/constants';
 
 // 暴露安全的 API 到渲染进程
@@ -156,6 +157,19 @@ contextBridge.exposeInMainWorld('electron', {
       set: (config: { keepAlive: '1d' | '7d' | '30d' | '365d' }) =>
         ipcRenderer.invoke(OpenClawSessionPolicyIpc.Set, config),
     },
+    session: {
+      patch: (options: {
+        sessionId: string;
+        patch: {
+          model?: string | null;
+          thinkingLevel?: string | null;
+          reasoningLevel?: string | null;
+          elevatedLevel?: string | null;
+          responseUsage?: 'off' | 'tokens' | 'full' | null;
+          sendPolicy?: 'allow' | 'deny' | null;
+        };
+      }) => ipcRenderer.invoke(OpenClawSessionIpc.Patch, options),
+    },
   },
   agents: {
     list: async () => {
@@ -228,7 +242,7 @@ contextBridge.exposeInMainWorld('electron', {
     setConfig: (config: {
       workingDirectory?: string;
       executionMode?: 'auto' | 'local' | 'sandbox';
-      agentEngine?: 'openclaw' | 'yd_cowork';
+      agentEngine?: 'openclaw';
       memoryEnabled?: boolean;
       memoryImplicitUpdateEnabled?: boolean;
       memoryLlmJudgeEnabled?: boolean;
@@ -462,18 +476,6 @@ contextBridge.exposeInMainWorld('electron', {
   },
   networkStatus: {
     send: (status: 'online' | 'offline') => ipcRenderer.send('network:status-change', status),
-  },
-  qwen: {
-    // OAuth登录
-    oauthLogin: () => ipcRenderer.invoke('qwen:oauth:login'),
-    // OAuth刷新token
-    oauthRefresh: (refreshToken: string) => ipcRenderer.invoke('qwen:oauth:refresh', refreshToken),
-    // OAuth进度监听
-    onOAuthProgress: (callback: (message: string) => void) => {
-      const handler = (_event: any, message: string) => callback(message);
-      ipcRenderer.on('qwen:oauth:progress', handler);
-      return () => ipcRenderer.removeListener('qwen:oauth:progress', handler);
-    },
   },
   auth: {
     login: (loginUrl?: string) => ipcRenderer.invoke('auth:login', { loginUrl }),

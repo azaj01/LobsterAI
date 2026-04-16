@@ -1,11 +1,12 @@
 import { EyeIcon, EyeSlashIcon, XCircleIcon as XCircleIconSolid } from '@heroicons/react/20/solid';
-import { ArrowTopRightOnSquareIcon,ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowTopRightOnSquareIcon, ChatBubbleLeftIcon, CheckCircleIcon, Cog6ToothIcon, CpuChipIcon, CubeIcon, EnvelopeIcon, InformationCircleIcon, KeyIcon, ShieldCheckIcon, SignalIcon, UserCircleIcon, XCircleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import React, { useCallback,useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
-import { type AppConfig, defaultConfig, getCustomProviderDefaultName,getProviderDisplayName,getVisibleProviders, isCustomProvider } from '../config';
+import { ProviderName, ProviderRegistry, resolveCodingPlanBaseUrl } from '../../shared/providers';
+import { type AppConfig, defaultConfig, getCustomProviderDefaultName, getProviderDisplayName, getVisibleProviders, isCustomProvider } from '../config';
 import { APP_ID, EXPORT_FORMAT_TYPE, EXPORT_PASSWORD } from '../constants/app';
+import { getProviderIcon } from '../providers/uiRegistry';
 import { apiService } from '../services/api';
 import type { AppUpdateInfo } from '../services/appUpdate';
 import { checkForAppUpdate } from '../services/appUpdate';
@@ -30,25 +31,7 @@ import ErrorMessage from './ErrorMessage';
 import BrainIcon from './icons/BrainIcon';
 import PencilIcon from './icons/PencilIcon';
 import PlusCircleIcon from './icons/PlusCircleIcon';
-import {
-  AnthropicIcon,
-  CustomProviderIcon,
-  DeepSeekIcon,
-  GeminiIcon,
-  GitHubCopilotIcon,
-  MiniMaxIcon,
-  MoonshotIcon,
-  OllamaIcon,
-  OpenAIIcon,
-  OpenRouterIcon,
-  QianfanIcon,
-  QwenIcon,
-  StepfunIcon,
-  VolcengineIcon,
-  XiaomiIcon,
-  YouDaoZhiYunIcon,
-  ZhipuIcon,
-} from './icons/providers';
+import { GitHubCopilotIcon } from './icons/providers';
 import TrashIcon from './icons/TrashIcon';
 import IMSettings from './im/IMSettings';
 import EmailSkillConfig from './skills/EmailSkillConfig';
@@ -79,26 +62,13 @@ const CUSTOM_PROVIDER_KEYS = [
 ] as const;
 
 const providerKeys = [
-  'openai',
-  'gemini',
-  'anthropic',
-  'deepseek',
-  'moonshot',
-  'zhipu',
-  'minimax',
-  'volcengine',
-  'qwen',
-  'youdaozhiyun',
-  'qianfan',
-  'stepfun',
-  'xiaomi',
-  'openrouter',
-  'github-copilot',
-  'ollama',
+  ...Object.values(ProviderName).filter(id => id !== ProviderName.Custom && id !== ProviderName.LobsteraiServer),
   ...CUSTOM_PROVIDER_KEYS,
 ] as const;
 
-type ProviderType = (typeof providerKeys)[number];
+type BuiltinProviderType = ProviderName;
+type CustomProviderType = (typeof CUSTOM_PROVIDER_KEYS)[number];
+type ProviderType = BuiltinProviderType | CustomProviderType;
 type ProvidersConfig = NonNullable<AppConfig['providers']>;
 type ProviderConfig = ProvidersConfig[string];
 type Model = NonNullable<ProviderConfig['models']>[number];
@@ -151,46 +121,22 @@ interface ProvidersImportPayload {
   providers?: Record<string, ProvidersImportEntry>;
 }
 
-const providerMeta: Record<ProviderType, { label: string; icon: React.ReactNode }> = {
-  openai: { label: 'OpenAI', icon: <OpenAIIcon /> },
-  deepseek: { label: 'DeepSeek', icon: <DeepSeekIcon /> },
-  gemini: { label: 'Gemini', icon: <GeminiIcon /> },
-  anthropic: { label: 'Anthropic', icon: <AnthropicIcon /> },
-  moonshot: { label: 'Moonshot', icon: <MoonshotIcon /> },
-  zhipu: { label: 'Zhipu', icon: <ZhipuIcon /> },
-  minimax: { label: 'MiniMax', icon: <MiniMaxIcon /> },
-  youdaozhiyun: { label: 'Youdao', icon: <YouDaoZhiYunIcon /> },
-  qwen: { label: 'Qwen', icon: <QwenIcon /> },
-  xiaomi: { label: 'Xiaomi', icon: <XiaomiIcon /> },
-  qianfan: { label: 'Qianfan', icon: <QianfanIcon /> },
-  stepfun: { label: 'StepFun', icon: <StepfunIcon /> },
-  volcengine: { label: 'Volcengine', icon: <VolcengineIcon /> },
-  openrouter: { label: 'OpenRouter', icon: <OpenRouterIcon /> },
-  'github-copilot': { label: 'GitHub Copilot', icon: <GitHubCopilotIcon /> },
-  ollama: { label: 'Ollama', icon: <OllamaIcon /> },
-  ...Object.fromEntries(
-    CUSTOM_PROVIDER_KEYS.map(key => [key, { label: getCustomProviderDefaultName(key), icon: <CustomProviderIcon /> }])
-  ) as Record<(typeof CUSTOM_PROVIDER_KEYS)[number], { label: string; icon: React.ReactNode }>,
-};
-
-const providerLinks: Partial<Record<ProviderType, { website: string; apiKey?: string }>> = {
-  openai:       { website: 'https://platform.openai.com',              apiKey: 'https://platform.openai.com/api-keys' },
-  gemini:       { website: 'https://aistudio.google.com',              apiKey: 'https://aistudio.google.com/apikey' },
-  anthropic:    { website: 'https://console.anthropic.com',            apiKey: 'https://console.anthropic.com/settings/keys' },
-  deepseek:     { website: 'https://platform.deepseek.com',            apiKey: 'https://platform.deepseek.com/api_keys' },
-  moonshot:     { website: 'https://platform.moonshot.cn',             apiKey: 'https://platform.moonshot.cn/console/api-keys' },
-  zhipu:        { website: 'https://open.bigmodel.cn',                 apiKey: 'https://open.bigmodel.cn/usercenter/apikeys' },
-  minimax:      { website: 'https://platform.minimaxi.com',            apiKey: 'https://platform.minimaxi.com/user-center/basic-information/interface-key' },
-  volcengine:   { website: 'https://console.volcengine.com/ark',       apiKey: 'https://console.volcengine.com/ark' },
-  qwen:         { website: 'https://dashscope.console.aliyun.com',     apiKey: 'https://dashscope.console.aliyun.com/apiKey' },
-  youdaozhiyun: { website: 'https://ai.youdao.com',                    apiKey: 'https://ai.youdao.com/console' },
-  stepfun:      { website: 'https://platform.stepfun.com',             apiKey: 'https://platform.stepfun.com/interface-key' },
-  xiaomi:       { website: 'https://dev.mi.com/platform',              apiKey: 'https://dev.mi.com/platform' },
-  openrouter:   { website: 'https://openrouter.ai',                    apiKey: 'https://openrouter.ai/keys' },
-  ollama:       { website: 'https://ollama.com' },
-};
 
 const providerRequiresApiKey = (provider: ProviderType) => provider !== 'ollama' && provider !== 'github-copilot';
+const hasProviderAuthConfigured = (provider: ProviderType, config: ProviderConfig): boolean => {
+  if (provider === 'ollama') {
+    return true;
+  }
+
+  if (provider === 'minimax') {
+    if (config.authType === 'apikey') {
+      return config.apiKey.trim().length > 0;
+    }
+    return (config.oauthAccessToken?.trim().length ?? 0) > 0;
+  }
+
+  return config.apiKey.trim().length > 0;
+};
 const normalizeBaseUrl = (baseUrl: string): string => baseUrl.trim().replace(/\/+$/, '').toLowerCase();
 const normalizeApiFormat = (value: unknown): 'anthropic' | 'openai' => (
   value === 'openai' ? 'openai' : 'anthropic'
@@ -624,13 +570,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   // authType defaults to undefined on first open, which should behave as OAuth mode
   const minimaxIsOAuthMode = providers.minimax.authType !== 'apikey';
   const isBaseUrlLocked = (activeProvider === 'zhipu' && providers.zhipu.codingPlanEnabled) || (activeProvider === 'qwen' && providers.qwen.codingPlanEnabled) || (activeProvider === 'volcengine' && providers.volcengine.codingPlanEnabled) || (activeProvider === 'moonshot' && providers.moonshot.codingPlanEnabled) || (activeProvider === 'minimax' && minimaxIsOAuthMode);
-  
+
   // 创建引用来确保内容区域的滚动
   const contentRef = useRef<HTMLDivElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const emailCopiedTimerRef = useRef<number | null>(null);
   const updateCheckTimerRef = useRef<number | null>(null);
-  
+
   // 快捷键设置
   const [shortcuts, setShortcuts] = useState({
     newChat: 'Ctrl+N',
@@ -768,7 +714,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const [coworkAgentEngine, setCoworkAgentEngine] = useState<CoworkAgentEngine>(coworkConfig.agentEngine || 'openclaw');
   const [coworkMemoryEnabled, setCoworkMemoryEnabled] = useState<boolean>(coworkConfig.memoryEnabled ?? true);
   const [coworkMemoryLlmJudgeEnabled, setCoworkMemoryLlmJudgeEnabled] = useState<boolean>(coworkConfig.memoryLlmJudgeEnabled ?? false);
-  const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? false);
+  const [skipMissedJobs, setSkipMissedJobs] = useState<boolean>(coworkConfig.skipMissedJobs ?? true);
   const [openClawSessionKeepAlive, setOpenClawSessionKeepAlive] = useState<OpenClawSessionKeepAlive>(
     coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays,
   );
@@ -789,7 +735,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setCoworkAgentEngine(coworkConfig.agentEngine || 'openclaw');
     setCoworkMemoryEnabled(coworkConfig.memoryEnabled ?? true);
     setCoworkMemoryLlmJudgeEnabled(coworkConfig.memoryLlmJudgeEnabled ?? false);
-    setSkipMissedJobs(coworkConfig.skipMissedJobs ?? false);
+    setSkipMissedJobs(coworkConfig.skipMissedJobs ?? true);
     setOpenClawSessionKeepAlive(coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   }, [
     coworkConfig.agentEngine,
@@ -797,6 +743,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     coworkConfig.memoryLlmJudgeEnabled,
     coworkConfig.openClawSessionPolicy?.keepAlive,
     coworkConfig.skipMissedJobs,
+    coworkConfig.openClawSessionPolicy?.keepAlive,
   ]);
 
   useEffect(() => () => {
@@ -827,7 +774,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   useEffect(() => {
     try {
       const config = configService.getConfig();
-      
+
       // Set general settings
       initialThemeRef.current = config.theme;
       initialLanguageRef.current = config.language;
@@ -991,7 +938,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           }));
         }
       }
-      
+
       // Load provider-specific configurations if available
       // 合并已保存的配置和默认配置，确保新添加的 provider 能被显示
       if (config.providers) {
@@ -1035,7 +982,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
           ) as ProvidersConfig;
         });
       }
-      
+
       // 加载快捷键设置
       if (config.shortcuts) {
         setShortcuts(prev => ({
@@ -1368,8 +1315,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             minimax: {
               ...prev.minimax,
               enabled: true,
-              apiKey: tokenPayload.access_token!,
-              baseUrl,
+              oauthAccessToken: tokenPayload.access_token!,
+              oauthBaseUrl: baseUrl,
               apiFormat: 'anthropic',
               authType: 'oauth',
               oauthRefreshToken: tokenPayload.refresh_token,
@@ -1404,7 +1351,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       ...prev,
       minimax: {
         ...prev.minimax,
-        apiKey: '',
+        enabled: false,
+        oauthAccessToken: undefined,
+        oauthBaseUrl: undefined,
         oauthRefreshToken: undefined,
         oauthTokenExpiresAt: undefined,
       },
@@ -1415,7 +1364,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const hasCoworkConfigChanges = coworkAgentEngine !== coworkConfig.agentEngine
     || coworkMemoryEnabled !== coworkConfig.memoryEnabled
     || coworkMemoryLlmJudgeEnabled !== coworkConfig.memoryLlmJudgeEnabled
-    || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? false)
+    || skipMissedJobs !== (coworkConfig.skipMissedJobs ?? true)
     || openClawSessionKeepAlive !== (coworkConfig.openClawSessionPolicy?.keepAlive || OpenClawSessionKeepAliveValues.ThirtyDays);
   const isOpenClawAgentEngine = coworkAgentEngine === 'openclaw';
 
@@ -1570,16 +1519,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const toggleProviderEnabled = (provider: ProviderType) => {
     const providerConfig = providers[provider];
     const isEnabling = !providerConfig.enabled;
-    const missingApiKey = providerRequiresApiKey(provider) && !providerConfig.apiKey.trim();
-
-    if (isEnabling && missingApiKey) {
-      setError(i18nService.t('apiKeyRequired'));
-      return;
-    }
+    const hasValidAuth = hasProviderAuthConfigured(provider, providerConfig);
 
     // GitHub Copilot requires device code auth — redirect to sign-in flow
     if (provider === 'github-copilot' && isEnabling && !providerConfig.apiKey.trim()) {
       handleCopilotSignIn();
+      return;
+    }
+
+    if (isEnabling && !hasValidAuth) {
+      setError(i18nService.t('apiKeyRequired'));
       return;
     }
 
@@ -1689,10 +1638,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       const normalizedProviders = Object.fromEntries(
         Object.entries(providers).map(([providerKey, providerConfig]) => {
           const apiFormat = getEffectiveApiFormat(providerKey, providerConfig.apiFormat);
+          const hasValidAuth = hasProviderAuthConfigured(providerKey as ProviderType, providerConfig);
           return [
             providerKey,
             {
               ...providerConfig,
+              enabled: providerConfig.enabled && hasValidAuth,
               apiFormat,
               baseUrl: resolveBaseUrl(providerKey as ProviderType, providerConfig.baseUrl, apiFormat),
             },
@@ -1735,15 +1686,6 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       let apiKeyToUse = primaryProvider.apiKey;
       let baseUrlToUse = primaryProvider.baseUrl;
 
-      // For Qwen provider, check if OAuth should be used
-      if (firstEnabledProvider && firstEnabledProvider[0] === 'qwen') {
-        const qwenConfig = firstEnabledProvider[1] as ProvidersConfig['qwen'];
-        if (!qwenConfig.apiKey && qwenConfig.oauthCredentials) {
-          // Use OAuth token as API key placeholder
-          apiKeyToUse = 'qwen-oauth';
-          baseUrlToUse = qwenConfig.oauthCredentials.resourceUrl || qwenConfig.baseUrl;
-        }
-      }
 
       apiService.setConfig({
         apiKey: apiKeyToUse,
@@ -1883,11 +1825,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
   const handleDeleteModel = (modelId: string) => {
     if (!providers[activeProvider].models) return;
-    
+
     const updatedModels = providers[activeProvider].models.filter(
       model => model.id !== modelId
     );
-    
+
     setProviders(prev => ({
       ...prev,
       [activeProvider]: {
@@ -1995,10 +1937,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setIsTestResultModalOpen(false);
     setTestResult(null);
 
-    // Check if provider has valid authentication (API Key or OAuth for Qwen)
-    const hasValidAuth = providerConfig.apiKey || 
-      (testingProvider === 'qwen' && (providerConfig as ProvidersConfig['qwen']).oauthCredentials);
-    
+    const hasValidAuth = providerConfig.apiKey;
+
+
     if (providerRequiresApiKey(testingProvider) && !hasValidAuth) {
       showTestResultModal({ success: false, message: i18nService.t('apiKeyRequired') }, testingProvider);
       setIsTesting(false);
@@ -2020,14 +1961,14 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       // Apply Coding Plan endpoint switch
       let effectiveBaseUrl = resolveBaseUrl(testingProvider, providerConfig.baseUrl, getEffectiveApiFormat(testingProvider, providerConfig.apiFormat));
       let effectiveApiFormat = getEffectiveApiFormat(testingProvider, providerConfig.apiFormat);
-      
+
       // Handle Coding Plan endpoint switch for supported providers
       if ((providerConfig as { codingPlanEnabled?: boolean }).codingPlanEnabled && (effectiveApiFormat === 'anthropic' || effectiveApiFormat === 'openai')) {
         const resolved = resolveCodingPlanBaseUrl(testingProvider, true, effectiveApiFormat, effectiveBaseUrl);
         effectiveBaseUrl = resolved.baseUrl;
         effectiveApiFormat = resolved.effectiveFormat;
       }
-      
+
       let normalizedBaseUrl = effectiveBaseUrl.replace(/\/+$/, '');
 
       // Determine effective API key
@@ -2217,34 +2158,40 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
     try {
       const raw = await file.text();
+      console.log(`[Settings] importing providers from file: ${file.name}, size: ${file.size}`);
       let payload: ProvidersImportPayload;
       try {
         payload = JSON.parse(raw) as ProvidersImportPayload;
       } catch {
+        console.warn('[Settings] import failed: invalid JSON in file');
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
 
       if (!payload || payload.type !== EXPORT_FORMAT_TYPE || !payload.providers) {
+        console.warn(`[Settings] import failed: invalid format, type=${payload?.type}, hasProviders=${!!payload?.providers}`);
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
 
       // Check if it's version 2 (password-based encryption)
       if (payload.version === 2 && payload.encryption?.keySource === 'password') {
+        console.log('[Settings] import: detected v2 password-based encryption');
         await processImportPayloadWithPassword(payload);
         return;
       }
 
       // Version 1 (legacy local-store key) - try to decrypt with local key
       if (payload.version === 1) {
+        console.log('[Settings] import: detected v1 local-key encryption');
         await processImportPayloadWithLocalKey(payload);
         return;
       }
 
+      console.warn(`[Settings] import failed: unsupported version=${payload.version}`);
       setError(i18nService.t('invalidProvidersFile'));
     } catch (err) {
-      console.error('Failed to import providers:', err);
+      console.error('[Settings] import failed:', err);
       setError(i18nService.t('importProvidersFailed'));
     }
   };
@@ -2252,6 +2199,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   const processImportPayloadWithLocalKey = async (payload: ProvidersImportPayload) => {
     setIsImportingProviders(true);
     try {
+      const fileKeys = Object.keys(payload.providers ?? {});
+      console.log(`[Settings] v1 import: processing ${fileKeys.length} providers from file`);
       const providerUpdates: Partial<ProvidersConfig> = {};
       let hadDecryptFailure = false;
       for (const providerKey of providerKeys) {
@@ -2266,32 +2215,36 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
         } else if (providerData.apiKey && typeof providerData.apiKey === 'object') {
           try {
             apiKey = await decryptSecret(providerData.apiKey as EncryptedPayload);
+            console.log(`[Settings] v1 import: decrypted key for ${providerKey}`);
           } catch (error) {
             hadDecryptFailure = true;
-            console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
+            console.warn(`[Settings] v1 import: failed to decrypt key for ${providerKey}`, error);
           }
         } else if (typeof providerData.apiKeyEncrypted === 'string' && typeof providerData.apiKeyIv === 'string') {
           try {
             apiKey = await decryptSecret({ encrypted: providerData.apiKeyEncrypted, iv: providerData.apiKeyIv });
+            console.log(`[Settings] v1 import: decrypted key for ${providerKey}`);
           } catch (error) {
             hadDecryptFailure = true;
-            console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
+            console.warn(`[Settings] v1 import: failed to decrypt key for ${providerKey}`, error);
           }
         }
 
         const models = normalizeModels(providerData.models);
+        const existing = providers[providerKey];
 
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : existing?.enabled ?? false,
+          apiKey: apiKey ?? existing?.apiKey ?? '',
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : existing?.baseUrl ?? '',
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existing?.apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existing as ProviderConfig)?.codingPlanEnabled,
+          models: models ?? existing?.models,
         };
       }
 
       if (Object.keys(providerUpdates).length === 0) {
+        console.warn(`[Settings] v1 import failed: no matching providers found, file keys: ${fileKeys.join(', ')}`);
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
@@ -2308,11 +2261,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       });
       setIsTestResultModalOpen(false);
       setTestResult(null);
+      console.log(`[Settings] v1 import complete: updated ${Object.keys(providerUpdates).length} providers`);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
       }
     } catch (err) {
-      console.error('Failed to import providers:', err);
+      console.error('[Settings] v1 import failed:', err);
       const isDecryptError = err instanceof Error
         && (err.message === 'Invalid encrypted payload' || err.name === 'OperationError');
       const message = isDecryptError
@@ -2332,6 +2286,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
     setIsImportingProviders(true);
 
     try {
+      const fileKeys = Object.keys(payload.providers);
+      console.log(`[Settings] v2 import: processing ${fileKeys.length} providers from file`);
       const providerUpdates: Partial<ProvidersConfig> = {};
       let hadDecryptFailure = false;
 
@@ -2350,26 +2306,29 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
             // Version 2 password-based encryption
             try {
               apiKey = await decryptWithPassword(apiKeyObj, DEFAULT_EXPORT_PASSWORD);
+              console.log(`[Settings] v2 import: decrypted key for ${providerKey}`);
             } catch (error) {
               hadDecryptFailure = true;
-              console.warn(`Failed to decrypt provider key for ${providerKey}`, error);
+              console.warn(`[Settings] v2 import: failed to decrypt key for ${providerKey}`, error);
             }
           }
         }
 
         const models = normalizeModels(providerData.models);
+        const existing = providers[providerKey];
 
         providerUpdates[providerKey] = {
-          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : providers[providerKey].enabled,
-          apiKey: apiKey ?? providers[providerKey].apiKey,
-          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : providers[providerKey].baseUrl,
-          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? providers[providerKey].apiFormat),
-          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (providers[providerKey] as ProviderConfig).codingPlanEnabled,
-          models: models ?? providers[providerKey].models,
+          enabled: typeof providerData.enabled === 'boolean' ? providerData.enabled : existing?.enabled ?? false,
+          apiKey: apiKey ?? existing?.apiKey ?? '',
+          baseUrl: typeof providerData.baseUrl === 'string' ? providerData.baseUrl : existing?.baseUrl ?? '',
+          apiFormat: getEffectiveApiFormat(providerKey, providerData.apiFormat ?? existing?.apiFormat),
+          codingPlanEnabled: typeof providerData.codingPlanEnabled === 'boolean' ? providerData.codingPlanEnabled : (existing as ProviderConfig)?.codingPlanEnabled,
+          models: models ?? existing?.models,
         };
       }
 
       if (Object.keys(providerUpdates).length === 0) {
+        console.warn(`[Settings] v2 import failed: no matching providers found, file keys: ${fileKeys.join(', ')}`);
         setError(i18nService.t('invalidProvidersFile'));
         return;
       }
@@ -2381,6 +2340,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
 
       if (!anyKeyDecrypted && hadDecryptFailure) {
         // All decryptions failed - likely wrong password
+        console.warn('[Settings] v2 import failed: all key decryptions failed, likely wrong password');
         setError(i18nService.t('decryptProvidersFailed'));
         return;
       }
@@ -2397,11 +2357,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
       });
       setIsTestResultModalOpen(false);
       setTestResult(null);
+      console.log(`[Settings] v2 import complete: updated ${Object.keys(providerUpdates).length} providers`);
       if (hadDecryptFailure) {
         setNoticeMessage(i18nService.t('decryptProvidersPartial'));
       }
     } catch (err) {
-      console.error('Failed to import providers:', err);
+      console.error('[Settings] v2 import failed:', err);
       const isDecryptError = err instanceof Error
         && (err.message === 'Invalid encrypted payload' || err.name === 'OperationError');
       const message = isDecryptError
@@ -2775,7 +2736,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                         <rect x="32" y="34" width="40" height="4" rx="2" fill={c1} opacity="0.6" />
                       </svg>
                       <span className="text-[10px] font-medium truncate w-full text-center" style={{ color: isSelected ? 'var(--lobster-primary)' : 'var(--lobster-text-primary)' }}>
-                        {t.meta.name}
+                        {i18nService.t('theme-name-' + t.meta.id) || t.meta.name}
                       </span>
                     </button>
                   );
@@ -2986,12 +2947,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               {Object.entries(visibleProviders).map(([provider, config]) => {
                 const providerKey = provider as ProviderType;
                 const isCustom = isCustomProvider(provider);
-                const providerInfo = providerMeta[providerKey];
-                const missingApiKey = providerRequiresApiKey(providerKey) && !config.apiKey.trim();
-                const canToggleProvider = config.enabled || !missingApiKey;
+                const hasValidAuth = hasProviderAuthConfigured(providerKey, config);
+                const effectiveEnabled = config.enabled && hasValidAuth;
+                const canToggleProvider = effectiveEnabled || hasValidAuth;
                 const displayLabel = isCustom
                   ? ((config as ProviderConfig).displayName || getCustomProviderDefaultName(provider))
-                  : (providerInfo?.label ?? getProviderDisplayName(provider));
+                  : (ProviderRegistry.get(providerKey)?.label ?? getProviderDisplayName(provider));
                 return (
                   <div
                     key={provider}
@@ -3005,7 +2966,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                     <div className="flex flex-1 items-center min-w-0">
                       <div className="mr-2 flex h-7 w-7 items-center justify-center shrink-0">
                         <span className="text-foreground">
-                          {isCustom ? <CustomProviderIcon /> : providerInfo?.icon}
+                          {getProviderIcon(provider)}
                         </span>
                       </div>
                       <div className="flex flex-col min-w-0">
@@ -3042,7 +3003,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       <div
                         title={!canToggleProvider ? i18nService.t('configureApiKey') : undefined}
                         className={`w-7 h-4 rounded-full flex items-center transition-colors ${
-                          config.enabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
+                          effectiveEnabled ? 'bg-primary' : 'bg-gray-400 dark:bg-gray-600'
                         } ${
                           canToggleProvider ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'
                         }`}
@@ -3056,7 +3017,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       >
                         <div
                           className={`w-3 h-3 rounded-full bg-white shadow-md transform transition-transform ${
-                            config.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                            effectiveEnabled ? 'translate-x-3.5' : 'translate-x-0.5'
                           }`}
                         />
                       </div>
@@ -3083,13 +3044,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   <h3 className="text-base font-medium text-foreground">
                     {isCustomProvider(activeProvider)
                       ? ((providers[activeProvider] as ProviderConfig)?.displayName || getCustomProviderDefaultName(activeProvider))
-                      : (providerMeta[activeProvider]?.label ?? getProviderDisplayName(activeProvider))
+                      : (ProviderRegistry.get(activeProvider)?.label ?? getProviderDisplayName(activeProvider))
                     } {i18nService.t('providerSettings')}
                   </h3>
-                  {providerLinks[activeProvider]?.website && (
+                  {ProviderRegistry.get(activeProvider)?.website && (
                     <button
                       type="button"
-                      onClick={() => void window.electron.shell.openExternal(providerLinks[activeProvider]!.website)}
+                      onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get(activeProvider)!.website!)}
                       className="p-0.5 rounded text-secondary hover:text-primary transition-colors"
                       title={i18nService.t('visitOfficialSite')}
                       aria-label={i18nService.t('visitOfficialSite')}
@@ -3100,37 +3061,66 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 </div>
                 <div
                   className={`px-2 py-0.5 rounded-lg text-xs font-medium ${
-                    providers[activeProvider].enabled
+                    providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
                       ? 'bg-green-500/20 text-green-600 dark:text-green-400'
                       : 'bg-red-500/20 text-red-600 dark:text-red-400'
                   }`}
                 >
-                  {providers[activeProvider].enabled ? i18nService.t('providerStatusOn') : i18nService.t('providerStatusOff')}
+                  {providers[activeProvider].enabled && hasProviderAuthConfigured(activeProvider, providers[activeProvider])
+                    ? i18nService.t('providerStatusOn')
+                    : i18nService.t('providerStatusOff')}
                 </div>
               </div>
 
               {/* MiniMax OAuth auth section */}
               {activeProvider === 'minimax' && (
                 <div className="space-y-3">
-                  {/* Auth type tabs */}
+                  {/* Auth type radio cards */}
                   <div>
-                    <div className="flex rounded-xl overflow-hidden border border-border mb-3">
-                      <button
-                        type="button"
-                        onClick={() => setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'oauth' } }))}
-                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${minimaxIsOAuthMode ? 'bg-primary text-white' : 'text-secondary hover:bg-surface-raised'}`}
-                      >
-                        {i18nService.t('minimaxOAuthTabOAuth')}
-                      </button>
+                    <p className="text-xs font-medium text-foreground mb-2">
+                      {i18nService.t('minimaxAuthMethodLabel')}
+                    </p>
+                    <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={() => {
-                          setProviders(prev => ({ ...prev, minimax: { ...prev.minimax, authType: 'apikey' } }));
+                          setProviders(prev => ({
+                            ...prev,
+                            minimax: {
+                              ...prev.minimax,
+                              authType: 'apikey',
+                              enabled: prev.minimax.enabled && prev.minimax.apiKey.trim().length > 0,
+                            },
+                          }));
                           setMinimaxOAuthPhase({ kind: 'idle' });
                         }}
-                        className={`flex-1 py-1.5 text-xs font-medium transition-colors ${!minimaxIsOAuthMode ? 'bg-primary text-white' : 'text-secondary hover:bg-surface-raised'}`}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${!minimaxIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
                       >
-                        {i18nService.t('minimaxOAuthTabApiKey')}
+                        <div className="flex items-start justify-between">
+                          <KeyIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
+                          {!minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                        </div>
+                        <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabApiKey')}</p>
+                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('minimaxAuthApiKeyDesc')}</p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProviders(prev => ({
+                          ...prev,
+                          minimax: {
+                            ...prev.minimax,
+                            authType: 'oauth',
+                            enabled: prev.minimax.enabled && (prev.minimax.oauthAccessToken?.trim().length ?? 0) > 0,
+                          },
+                        }))}
+                        className={`flex-1 p-3 rounded-xl border-2 text-left transition-all ${minimaxIsOAuthMode ? 'border-primary bg-primary/5' : 'border-border opacity-60 hover:opacity-80'}`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <ShieldCheckIcon className="h-4 w-4 text-foreground mt-0.5 shrink-0" />
+                          {minimaxIsOAuthMode && <CheckCircleIcon className="h-4 w-4 text-primary shrink-0" />}
+                        </div>
+                        <p className="text-xs font-semibold text-foreground mt-1.5">{i18nService.t('minimaxOAuthTabOAuth')}</p>
+                        <p className="text-[11px] text-secondary mt-0.5 leading-relaxed">{i18nService.t('minimaxAuthOAuthDesc')}</p>
                       </button>
                     </div>
                   </div>
@@ -3142,10 +3132,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                         <label htmlFor="minimax-apiKey" className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
                           {i18nService.t('apiKey')}
                         </label>
-                        {providerLinks.minimax?.apiKey && (
+                        {ProviderRegistry.get('minimax')?.apiKeyUrl && (
                           <button
                             type="button"
-                            onClick={() => void window.electron.shell.openExternal(providerLinks.minimax!.apiKey!)}
+                            onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get('minimax')!.apiKeyUrl!)}
                             className="text-[11px] text-claude-accent hover:underline transition-colors"
                           >
                             {i18nService.t('getApiKey')} →
@@ -3189,7 +3179,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                   {minimaxIsOAuthMode && (
                     <div className="space-y-2 min-h-[68px]">
                       {/* Already logged in */}
-                      {minimaxOAuthPhase.kind === 'idle' && providers.minimax.apiKey && (
+                      {minimaxOAuthPhase.kind === 'idle' && providers.minimax.oauthAccessToken && (
                         <div className="p-3 rounded-xl bg-green-500/10 border border-green-500/20 space-y-2">
                           <p className="text-xs text-green-600 dark:text-green-400 font-medium">
                             {i18nService.t('minimaxOAuthLoggedIn')}
@@ -3214,7 +3204,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                       )}
 
                       {/* Not logged in yet — show region selector + login button */}
-                      {minimaxOAuthPhase.kind === 'idle' && !providers.minimax.apiKey && (
+                      {minimaxOAuthPhase.kind === 'idle' && !providers.minimax.oauthAccessToken && (
                         <div className="space-y-2">
                           <div>
                             <label className="block text-xs font-medium text-foreground mb-1">
@@ -3344,10 +3334,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                         <label htmlFor={`${activeProvider}-apiKey`} className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
                           {i18nService.t('apiKey')}
                         </label>
-                        {providerLinks[activeProvider]?.apiKey && (
+                        {ProviderRegistry.get(activeProvider)?.apiKeyUrl && (
                           <button
                             type="button"
-                            onClick={() => void window.electron.shell.openExternal(providerLinks[activeProvider]!.apiKey!)}
+                            onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get(activeProvider)!.apiKeyUrl!)}
                             className="text-[11px] text-claude-accent hover:underline transition-colors"
                           >
                             {i18nService.t('getApiKey')} →
@@ -3394,10 +3384,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                         <label htmlFor="qwen-apiKey" className="block text-xs font-medium dark:text-claude-darkText text-claude-text">
                           API Key
                         </label>
-                        {providerLinks.qwen?.apiKey && (
+                        {ProviderRegistry.get('qwen')?.apiKeyUrl && (
                           <button
                             type="button"
-                            onClick={() => void window.electron.shell.openExternal(providerLinks.qwen!.apiKey!)}
+                            onClick={() => void window.electron.shell.openExternal(ProviderRegistry.get('qwen')!.apiKeyUrl!)}
                             className="text-[11px] text-claude-accent hover:underline transition-colors"
                           >
                             {i18nService.t('getApiKey')} →
@@ -3807,7 +3797,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
                 <button
                   type="button"
                   onClick={handleTestConnection}
-                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey && !(activeProvider === 'qwen' && providers.qwen.oauthCredentials))}
+                  disabled={isTesting || (providerRequiresApiKey(activeProvider) && !providers[activeProvider].apiKey)}
                   className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-xl border dark:border-claude-darkBorder border-claude-border dark:text-claude-darkText text-claude-text dark:hover:bg-claude-darkSurfaceHover hover:bg-claude-surfaceHover disabled:opacity-50 disabled:cursor-not-allowed transition-colors active:scale-[0.98]"
                 >
                   <SignalIcon className="h-3.5 w-3.5 mr-1.5" />
@@ -4250,7 +4240,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
               </div>
 
               <div className="flex items-center gap-2 text-xs text-secondary">
-                <span>{providerMeta[testResult.provider]?.label ?? testResult.provider}</span>
+                <span>{ProviderRegistry.get(testResult.provider)?.label ?? testResult.provider}</span>
                 <span className="text-[11px]">•</span>
                 <span className={`inline-flex items-center gap-1 ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                   {testResult.success ? (
@@ -4525,4 +4515,4 @@ const Settings: React.FC<SettingsProps> = ({ onClose, initialTab, notice, notice
   );
 };
 
-export default Settings; 
+export default Settings;

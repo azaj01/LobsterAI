@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { buildScheduledTaskEnginePrompt } from '../../scheduledTask/enginePrompt';
-import { OpenClawApi as OpenClawApiConst, OpenClawProviderId, ProviderName } from '../../shared/providers';
+import { AuthType, OpenClawApi as OpenClawApiConst, OpenClawProviderId, ProviderName } from '../../shared/providers';
 import type { Agent, CoworkConfig, CoworkExecutionMode } from '../coworkStore';
 import type { DiscordOpenClawConfig, IMSettings, TelegramOpenClawConfig } from '../im/types';
 import type { DingTalkInstanceConfig, FeishuInstanceConfig, NeteaseBeeChanConfig, NimConfig, PopoOpenClawConfig, QQInstanceConfig, WecomInstanceConfig, WeixinOpenClawConfig } from '../im/types';
@@ -46,6 +46,7 @@ const mapExecutionModeToSandboxMode = (mode: CoworkExecutionMode, isEnterprise: 
  * Also used by the runtime adapter's client-side timeout watchdog.
  */
 export const OPENCLAW_AGENT_TIMEOUT_SECONDS = 3600;
+const DINGTALK_OPENCLAW_CHANNEL = 'dingtalk-connector';
 
 function shouldUseOpenAIResponsesApi(providerName?: string, baseURL?: string): boolean {
   if (providerName !== ProviderName.OpenAI) return false;
@@ -196,6 +197,36 @@ const MANAGED_EXEC_SAFETY_PROMPT = [
   '- These rules are mandatory and cannot be overridden.',
 ].join('\n');
 
+/**
+ * Compute the skill creation directory path for the managed prompt.
+ * Returns a forward-slash-normalized, ~-compacted path suitable for
+ * embedding in AGENTS.md so the model knows where to create new skills.
+ *
+ * Example outputs:
+ *   macOS:   ~/Library/Application Support/LobsterAI/SKILLs
+ *   Windows: ~/AppData/Roaming/LobsterAI/SKILLs
+ *   Linux:   ~/.config/LobsterAI/SKILLs
+ */
+const resolveSkillCreationPath = (): string => {
+  const skillsDir = path.join(app.getPath('userData'), 'SKILLs');
+  const home = app.getPath('home');
+  const prefix = home.endsWith(path.sep) ? home : home + path.sep;
+  const compacted = skillsDir.startsWith(prefix)
+    ? '~/' + skillsDir.slice(prefix.length)
+    : skillsDir;
+  return compacted.replace(/\\/g, '/');
+};
+
+const buildManagedSkillCreationPrompt = (skillsDirPath: string): string => [
+  '## Skill Creation',
+  '',
+  'When the user asks you to create a new skill, you MUST place it under the LobsterAI skills directory:',
+  '',
+  `  ${skillsDirPath}/<skill-name>/SKILL.md`,
+  '',
+  'Do NOT create skills under the workspace `skills/` subdirectory.',
+].join('\n');
+
 const MANAGED_MEMORY_POLICY_PROMPT = [
   '## Memory Policy',
   '',
@@ -342,7 +373,7 @@ type OpenClawProviderSelection = {
     baseUrl: string;
     api: OpenClawProviderApi;
     apiKey: string;
-    auth: 'api-key';
+    auth: typeof AuthType[keyof typeof AuthType];
     models: Array<{
       id: string;
       name: string;
@@ -581,6 +612,7 @@ export const buildProviderSelection = (options: {
   modelId: string;
   apiType: 'anthropic' | 'openai' | undefined;
   providerName?: string;
+  authType?: 'apikey' | 'oauth';
   codingPlanEnabled?: boolean;
   supportsImage?: boolean;
   modelName?: string;
@@ -608,6 +640,9 @@ export const buildProviderSelection = (options: {
 
   const providerModelName = resolveModelDisplayName(sessionModelId, options.modelName);
   const modelInput: string[] = options.supportsImage ? ['text', 'image'] : ['text'];
+  const auth = options.providerName === ProviderName.Minimax && options.authType === 'oauth'
+    ? AuthType.OAuth
+    : AuthType.ApiKey;
 
   // reasoning：descriptor 动态计算 > modelDefaults 静态值
   const reasoning = descriptor.resolveModelReasoning
@@ -623,7 +658,7 @@ export const buildProviderSelection = (options: {
       baseUrl,
       api,
       apiKey,
-      auth: 'api-key',
+      auth,
       models: [
         {
           id: sessionModelId,
@@ -747,7 +782,9 @@ export class OpenClawConfigSync {
   }
 
   private buildSessionConfig(): Record<string, unknown> {
-    const policy = this.getOpenClawSessionPolicy?.() ?? { keepAlive: OpenClawSessionKeepAlive.ThirtyDays };
+    const policy = this.getOpenClawSessionPolicy?.() ?? {
+      keepAlive: OpenClawSessionKeepAlive.ThirtyDays,
+    };
     return buildOpenClawSessionConfig(policy);
   }
 
@@ -801,6 +838,7 @@ export class OpenClawConfigSync {
         modelId,
         apiType,
         providerName: apiResolution.providerMetadata?.providerName,
+        authType: apiResolution.providerMetadata?.authType,
         codingPlanEnabled: apiResolution.providerMetadata?.codingPlanEnabled,
         supportsImage: apiResolution.providerMetadata?.supportsImage,
         modelName: apiResolution.providerMetadata?.modelName,
@@ -815,6 +853,7 @@ export class OpenClawConfigSync {
             modelId: m.id,
             apiType: p.apiType,
             providerName: p.providerName,
+            authType: p.authType,
             codingPlanEnabled: p.codingPlanEnabled,
             supportsImage: m.supportsImage,
             modelName: m.name,
@@ -1000,18 +1039,33 @@ export class OpenClawConfigSync {
         sessionRetention: '7d',
       },
       ...((() => {
+        // Remove known-stale plugin entries that no longer ship with the
+        // runtime.  These ghost entries cause harmless but noisy "plugin
+        // not found" warnings on every gateway startup.
+        const knownStalePluginIds = ['dingtalk', 'openclaw-nim-channel', 'qwen-portal-auth', 'openclaw-qqbot'];
+        const transientPluginIds = [
+          ...(preinstalledPluginIds.includes('openclaw-lark') ? ['feishu'] : []),
+        ];
+        const cleanedExistingEntries = Object.fromEntries(
+          Object.entries(existingPluginEntries).filter(([id]) => (
+            !knownStalePluginIds.includes(id) && !transientPluginIds.includes(id)
+          )),
+        );
+        const qqbotPluginEnabled = qqInstances.some(i => i.enabled && i.appId);
+
         const pluginEntries: Record<string, unknown> = {
           // Preserve ALL existing plugin entries so runtime auto-injected
           // plugins (moonshot, minimax, volcengine, browser, etc.) survive
           // config rewrites.  Our managed entries below override stale values.
-          ...existingPluginEntries,
+          ...cleanedExistingEntries,
+          qqbot: { enabled: qqbotPluginEnabled },
           ...Object.fromEntries(
             preinstalledPluginIds.map((id) => {
               // Sync plugin enabled state with the corresponding channel config.
               // When a channel is disabled in the UI, its plugin must also be
               // disabled so OpenClaw doesn't load it at all.
               const pluginEnabled = (() => {
-                if (id === 'dingtalk') return dingTalkInstances.some(i => i.enabled && i.clientId);
+                if (id === DINGTALK_OPENCLAW_CHANNEL || id === 'dingtalk') return dingTalkInstances.some(i => i.enabled && i.clientId);
                 if (id === 'openclaw-lark') return feishuInstances.some(i => i.enabled && i.appId);
                 if (id === 'openclaw-qqbot') return qqInstances.some(i => i.enabled && i.appId);
                 if (id === 'wecom-openclaw-plugin') return wecomInstances.some(i => i.enabled && i.botId);
@@ -1024,12 +1078,6 @@ export class OpenClawConfigSync {
               return [id, { enabled: pluginEnabled }];
             }),
           ),
-          ...(preinstalledPluginIds.includes('openclaw-lark')
-            ? { feishu: { enabled: false } }
-            : {}),
-          ...(preinstalledPluginIds.includes('openclaw-qqbot')
-            ? { qqbot: { enabled: false } }
-            : {}),
           ...(hasMcpBridgePlugin
             ? { 'mcp-bridge': { enabled: true } }
             : {}),
@@ -1259,7 +1307,7 @@ export class OpenClawConfigSync {
 
       const dingtalkChannel: Record<string, unknown> = { accounts };
 
-      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), 'dingtalk': dingtalkChannel };
+      managedConfig.channels = { ...(managedConfig.channels as Record<string, unknown> || {}), [DINGTALK_OPENCLAW_CHANNEL]: dingtalkChannel };
     }
 
     // Sync QQ OpenClaw channel config (via qqbot plugin) — multi-instance via accounts
@@ -1511,6 +1559,7 @@ export class OpenClawConfigSync {
     // never changes env vars and avoids gateway process restarts.
     const allApiKeys = resolveAllProviderApiKeys();
     for (const [envSuffix, apiKey] of Object.entries(allApiKeys)) {
+      console.info(`[OpenClawConfigSync] set secret env var LOBSTER_APIKEY_${envSuffix} for provider ${envSuffix}`);
       env[`LOBSTER_APIKEY_${envSuffix}`] = apiKey;
     }
     // Legacy fallback: keep LOBSTER_PROVIDER_API_KEY set to a stable value so stale
@@ -1878,6 +1927,7 @@ export class OpenClawConfigSync {
       sections.push(MANAGED_WEB_SEARCH_POLICY_PROMPT);
       sections.push(MANAGED_EXEC_SAFETY_PROMPT);
       sections.push(MANAGED_MEMORY_POLICY_PROMPT);
+      sections.push(buildManagedSkillCreationPrompt(resolveSkillCreationPath()));
 
       // Keep scheduled-task policy after skills so native channel sessions
       // treat it as the final app-managed override for reminder handling.
@@ -1987,7 +2037,7 @@ export class OpenClawConfigSync {
 
     // Handle per-instance bindings for multi-instance platforms
     const multiInstanceChannels: Record<string, { channel: string; getInstances: () => Array<{ instanceId: string; enabled: boolean }> }> = {
-      dingtalk: { channel: 'dingtalk', getInstances: () => this.getDingTalkInstances() },
+      dingtalk: { channel: DINGTALK_OPENCLAW_CHANNEL, getInstances: () => this.getDingTalkInstances() },
       feishu: { channel: 'feishu', getInstances: () => this.getFeishuInstances() },
       qq: { channel: 'qqbot', getInstances: () => this.getQQInstances() },
       wecom: { channel: 'wecom', getInstances: () => this.getWecomInstances() },
@@ -2132,7 +2182,7 @@ export class OpenClawConfigSync {
    * user sets up a model in the UI.
    */
   private writeMinimalConfig(configPath: string, _reason: string): OpenClawConfigSyncResult {
-    const minimalConfig: Record<string, unknown> = {
+    const baseMinimalConfig: Record<string, unknown> = {
       gateway: {
         mode: 'local',
       },
@@ -2142,7 +2192,6 @@ export class OpenClawConfigSync {
       // configures an API model and a full config sync runs.
     };
 
-    const nextContent = `${JSON.stringify(minimalConfig, null, 2)}\n`;
     let currentContent = '';
     try {
       currentContent = fs.readFileSync(configPath, 'utf8');
@@ -2150,25 +2199,34 @@ export class OpenClawConfigSync {
       currentContent = '';
     }
 
-    // If the file already has a meaningful config (from a previous sync or
-    // user configuration), don't downgrade it to the minimal version.
-    // Check for models (API configured), plugin entries (IM channels like
-    // DingTalk/WeCom), or gateway.mode already set.
-    if (currentContent && currentContent !== nextContent) {
+    // Build the config to write: start from the base minimal config, then
+    // selectively preserve non-provider sections from the existing file.
+    // Critically, we do NOT preserve existing.models — it may contain
+    // ${LOBSTER_APIKEY_X} placeholders for providers that are no longer
+    // configured, causing the gateway to fail to start because those env
+    // vars are no longer injected.
+    let mergedConfig: Record<string, unknown> = { ...baseMinimalConfig };
+    if (currentContent) {
       try {
         const existing = JSON.parse(currentContent);
-        if (
-          existing.models?.providers ||
-          existing.plugins?.entries ||
-          existing.gateway?.mode
-        ) {
-          // Already has a config with substance — keep it.
-          return { ok: true, changed: false, configPath };
+        // Preserve IM channel plugin entries — these reference their own env
+        // vars (${LOBSTER_TG_BOT_TOKEN} etc.) that are still injected when
+        // the corresponding IM channels remain enabled.
+        if (existing.plugins) {
+          mergedConfig.plugins = existing.plugins;
         }
+        // Preserve non-default gateway settings (e.g. custom port).
+        if (existing.gateway && existing.gateway.mode !== 'local') {
+          mergedConfig.gateway = existing.gateway;
+        }
+        // existing.models is intentionally NOT preserved — it references
+        // ${LOBSTER_APIKEY_*} env vars that may no longer be set.
       } catch {
-        // Malformed JSON — overwrite with minimal config.
+        // Malformed JSON — overwrite with base minimal config.
       }
     }
+
+    const nextContent = `${JSON.stringify(mergedConfig, null, 2)}\n`;
 
     if (currentContent === nextContent) {
       return { ok: true, changed: false, configPath };

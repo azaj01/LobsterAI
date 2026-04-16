@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { OpenClawSessionPatch } from '../../common/openclawSession';
 interface ApiResponse {
   ok: boolean;
   status: number;
@@ -24,6 +25,7 @@ interface CoworkSession {
   pinned: boolean;
   cwd: string;
   systemPrompt: string;
+  modelOverride: string;
   executionMode: 'auto' | 'local' | 'sandbox';
   activeSkillIds: string[];
   agentId: string;
@@ -131,13 +133,6 @@ interface AppUpdateDownloadProgress {
   total: number | undefined;
   percent: number | undefined;
   speed: number | undefined;
-}
-
-interface QwenOAuthToken {
-  access: string;
-  refresh: string;
-  expires: number;
-  resourceUrl?: string;
 }
 
 interface WindowState {
@@ -332,6 +327,12 @@ interface IElectronAPI {
     sessionPolicy: {
       get: () => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
       set: (config: OpenClawSessionPolicyConfig) => Promise<{ success: boolean; config?: OpenClawSessionPolicyConfig; error?: string }>;
+    };
+    session: {
+      patch: (options: {
+        sessionId: string;
+        patch: OpenClawSessionPatch;
+      }) => Promise<{ success: boolean; session?: CoworkSession; error?: string }>;
     };
   };
   ipcRenderer: {
@@ -548,11 +549,7 @@ interface IElectronAPI {
     getAccessToken: () => Promise<string | null>;
     onCallback: (callback: (data: { code: string }) => void) => () => void;
   };
-  qwen: {
-    oauthLogin: () => Promise<{ success: boolean; data?: QwenOAuthToken; error?: string }>;
-    oauthRefresh: (refreshToken: string) => Promise<{ success: boolean; data?: QwenOAuthToken; error?: string }>;
-    onOAuthProgress: (callback: (message: string) => void) => () => void;
-  },
+  qwen: Record<string, never>;
   feishu: {
     install: {
       qrcode: (isLark: boolean) => Promise<{

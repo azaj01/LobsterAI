@@ -73,12 +73,16 @@ const BUNDLED_EXTENSIONS_TO_KEEP = new Set([
   // --- Channels (managed via entries or third-party replacements) ---
   'telegram', 'discord', 'feishu', 'qqbot',
   // --- Core features ---
-  'browser', 'memory-core', 'diffs', 'lobster', 'llm-task', 'zai',
+  'browser', 'memory-core', 'lobster', 'llm-task', 'zai',
   // --- Media / voice (bundled defaults, may be used by agents) ---
   'image-generation-core', 'media-understanding-core', 'speech-core', 'talk-voice',
   // --- Internal ---
   'acpx', 'thread-ownership', 'memory-lancedb', 'memory-wiki',
 ]);
+
+function shouldKeepBundledExtension(extensionId) {
+  return BUNDLED_EXTENSIONS_TO_KEEP.has(extensionId);
+}
 
 // ─── Strategy 3: Stub replacements ───
 // Packages not needed in headless gateway mode, replaced with lightweight stubs.
@@ -86,7 +90,14 @@ const BUNDLED_EXTENSIONS_TO_KEEP = new Set([
 // Callers already have try-catch protection.
 
 const PACKAGES_TO_STUB = [
-  'koffi',            // Windows FFI for terminal PTY — not needed in gateway mode
+  'koffi',                  // Windows FFI for terminal PTY — not needed in gateway mode
+  '@tloncorp/tlon-skill',   // Tlon channel pruned from dist/extensions; native binary not needed
+  '@lancedb',
+  '@jimp',
+  '@napi-rs',
+  'pdfjs-dist',
+  '@matrix-org',
+  '@img'
 ];
 
 const GENERIC_STUB_INDEX_CJS = `// Stub (CJS): this package is not needed for headless gateway operation.
@@ -240,7 +251,7 @@ function main() {
     try {
       for (const entry of fs.readdirSync(distExtDir, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        if (BUNDLED_EXTENSIONS_TO_KEEP.has(entry.name)) continue;
+        if (shouldKeepBundledExtension(entry.name)) continue;
         const fullPath = path.join(distExtDir, entry.name);
         fs.rmSync(fullPath, { recursive: true, force: true });
         stats.extensionsPruned.push(entry.name);
@@ -250,9 +261,60 @@ function main() {
     }
   }
 
+  // Step 1a: Prefer external openclaw-lark over bundled feishu when both are
+  // present. Keep the current runtime-code path intact and trim the duplicate
+  // bundled feishu extension only for packaging/runtime output.
+  const thirdPartyDir = path.join(runtimeRoot, 'third-party-extensions');
+  const externalLarkDir = path.join(thirdPartyDir, 'openclaw-lark');
+  const bundledFeishuDir = path.join(distExtDir, 'feishu');
+  if (fs.existsSync(externalLarkDir) && fs.existsSync(bundledFeishuDir)) {
+    const size = getDirSize(bundledFeishuDir);
+    fs.rmSync(bundledFeishuDir, { recursive: true, force: true });
+    stats.bytesFreed += size;
+    stats.dirsRemoved++;
+    console.log(
+      `[prune-openclaw-runtime] Removed bundled feishu because openclaw-lark is present (${(size / 1024 / 1024).toFixed(1)} MB)`
+    );
+  }
+
+  // Step 1b: Remove stale external qqbot payloads from older builds.
+  const staleExternalQqbotDir = path.join(thirdPartyDir, 'openclaw-qqbot');
+  if (fs.existsSync(staleExternalQqbotDir)) {
+    const size = getDirSize(staleExternalQqbotDir);
+    fs.rmSync(staleExternalQqbotDir, { recursive: true, force: true });
+    stats.bytesFreed += size;
+    stats.dirsRemoved++;
+    console.log(
+      `[prune-openclaw-runtime] Removed stale external openclaw-qqbot (${(size / 1024 / 1024).toFixed(1)} MB)`
+    );
+  }
+
   // Step 2: Replace large unnecessary packages with stubs
   for (const pkgName of PACKAGES_TO_STUB) {
     stubPackage(path.join(nodeModulesDir, pkgName), pkgName, stats);
+  }
+
+  // Step 2a: Remove orphaned platform-specific binaries for stubbed packages.
+  // When a package like @tloncorp/tlon-skill is stubbed, its optionalDependencies
+  // (e.g. @tloncorp/tlon-skill-darwin-x64) remain as orphaned siblings.
+  for (const pkgName of PACKAGES_TO_STUB) {
+    if (!pkgName.startsWith('@')) continue;
+    const [scope, base] = pkgName.split('/');
+    const scopeDir = path.join(nodeModulesDir, scope);
+    if (!fs.existsSync(scopeDir)) continue;
+    for (const entry of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === base) continue;
+      if (!entry.name.startsWith(base + '-')) continue;
+      const variantDir = path.join(scopeDir, entry.name);
+      const size = getDirSize(variantDir);
+      fs.rmSync(variantDir, { recursive: true, force: true });
+      stats.bytesFreed += size;
+      stats.dirsRemoved++;
+      console.log(
+        `[prune-openclaw-runtime] Removed orphaned platform binary ${scope}/${entry.name} (${(size / 1024 / 1024).toFixed(1)} MB)`
+      );
+    }
   }
 
   // Step 2b: Remove broken .bin symlinks left behind by stubbed packages
@@ -276,7 +338,6 @@ function main() {
   // npm v7+ auto-installs it into the plugin's own node_modules (~226 MB).
   // At runtime the host gateway already provides the SDK on the module path,
   // so this copy is redundant and safe to remove.
-  const thirdPartyDir = path.join(runtimeRoot, 'third-party-extensions');
   if (fs.existsSync(thirdPartyDir)) {
     try {
       for (const plugin of fs.readdirSync(thirdPartyDir, { withFileTypes: true })) {
@@ -328,4 +389,11 @@ function main() {
   );
 }
 
-main();
+module.exports = {
+  BUNDLED_EXTENSIONS_TO_KEEP,
+  shouldKeepBundledExtension,
+};
+
+if (require.main === module) {
+  main();
+}
