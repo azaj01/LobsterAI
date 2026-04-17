@@ -89,6 +89,7 @@ import { loadOpenClawSessionPolicyConfig, saveOpenClawSessionPolicyConfig } from
 import { SkillManager } from './skillManager';
 import { getSkillServiceManager } from './skillServices';
 import { SqliteStore } from './sqliteStore';
+import { StartupProfiler } from './startupProfiler';
 import { createTray, destroyTray, updateTrayMenu } from './trayManager';
 
 // 设置应用程序名称
@@ -4979,8 +4980,12 @@ if (!gotTheLock) {
 
   // 初始化应用
   const initApp = async () => {
+    const profiler = new StartupProfiler();
+
+    profiler.mark('app.whenReady');
     console.log('[Main] initApp: waiting for app.whenReady()');
     await app.whenReady();
+    profiler.measure('app.whenReady');
     console.log('[Main] initApp: app is ready');
 
     // Note: Calendar permission is checked on-demand when calendar operations are requested
@@ -5001,8 +5006,10 @@ if (!gotTheLock) {
       return net.fetch(`file://${filePath}`);
     });
 
+    profiler.mark('initStore');
     console.log('[Main] initApp: starting initStore()');
     store = await initStore();
+    profiler.measure('initStore');
     console.log('[Main] initApp: store initialized');
     refreshEndpointsTestMode(store);
 
@@ -5127,6 +5134,7 @@ if (!gotTheLock) {
 
     // Start the lightweight token proxy before OpenClaw config sync so that
     // lobsterai-server provider can use the proxy URL in its config.
+    profiler.mark('openClawTokenProxy');
     try {
       await startOpenClawTokenProxy({
         getAuthTokens,
@@ -5137,8 +5145,10 @@ if (!gotTheLock) {
     } catch (err) {
       console.warn('[Main] OpenClaw token proxy failed to start (non-fatal):', err);
     }
+    profiler.measure('openClawTokenProxy');
 
     // Enterprise config sync — must run before openclawConfigSync
+    profiler.mark('enterpriseConfigSync');
     // so enterprise data is in SQLite when the config is generated.
     const enterpriseConfigPath = resolveEnterpriseConfigPath();
     if (enterpriseConfigPath) {
@@ -5201,6 +5211,7 @@ if (!gotTheLock) {
         console.log('[Enterprise] config package removed, cleared enterprise mode and reset executionMode');
       }
     }
+    profiler.measure('enterpriseConfigSync');
 
     bindCoworkRuntimeForwarder();
     bindOpenClawStatusForwarder();
@@ -5217,13 +5228,18 @@ if (!gotTheLock) {
     // Start proxy BEFORE config sync so proxy-dependent providers (e.g. copilot)
     // get the correct baseURL on the first write, avoiding a mid-startup config
     // overwrite that triggers unnecessary gateway hot-reload.
+    profiler.mark('applyProxyPreference');
     const appConfig = getStore().get<AppConfigSettings>('app_config');
     await applyProxyPreference(getUseSystemProxyFromConfig(appConfig));
+    profiler.measure('applyProxyPreference');
 
+    profiler.mark('coworkOpenAICompatProxy');
     await startCoworkOpenAICompatProxy().catch((error) => {
       console.error('Failed to start OpenAI compatibility proxy:', error);
     });
+    profiler.measure('coworkOpenAICompatProxy');
 
+    profiler.mark('syncOpenClawConfig');
     const startupSync = await syncOpenClawConfig({
       reason: 'startup',
       restartGatewayIfRunning: false,
@@ -5231,6 +5247,7 @@ if (!gotTheLock) {
     if (!startupSync.success) {
       console.error('[OpenClaw] Startup config sync failed:', startupSync.error);
     }
+    profiler.measure('syncOpenClawConfig');
     if (resolveCoworkAgentEngine() === 'openclaw') {
       void ensureOpenClawRunningForCowork().then(() => {
         // Start cron polling once the gateway is confirmed running.
@@ -5245,6 +5262,7 @@ if (!gotTheLock) {
     }
 
     console.log('[Main] initApp: setStoreGetter done');
+    profiler.mark('skillManager');
     const manager = getSkillManager();
     console.log('[Main] initApp: getSkillManager done');
 
@@ -5258,12 +5276,14 @@ if (!gotTheLock) {
 
     // Non-critical: sync bundled skills to user data.
     // Wrapped in try-catch so a failure here does not block window creation.
+    profiler.mark('syncBundledSkills');
     try {
       manager.syncBundledSkillsToUserData();
       console.log('[Main] initApp: syncBundledSkillsToUserData done');
     } catch (error) {
       console.error('[Main] initApp: syncBundledSkillsToUserData failed:', error);
     }
+    profiler.measure('syncBundledSkills');
 
     try {
       manager.recoverInterruptedUpgrades();
@@ -5272,6 +5292,7 @@ if (!gotTheLock) {
       console.error('[Main] initApp: recoverInterruptedUpgrades failed:', error);
     }
 
+    profiler.mark('pythonRuntime');
     try {
       const runtimeResult = await ensurePythonRuntimeReady();
       if (!runtimeResult.success) {
@@ -5282,6 +5303,7 @@ if (!gotTheLock) {
     } catch (error) {
       console.error('[Main] initApp: ensurePythonRuntimeReady threw:', error);
     }
+    profiler.measure('pythonRuntime');
 
     try {
       manager.startWatching();
@@ -5291,6 +5313,7 @@ if (!gotTheLock) {
     }
 
     // Start skill services (non-critical)
+    profiler.mark('skillServices');
     try {
       const skillServices = getSkillServiceManager();
       console.log('[Main] initApp: getSkillServiceManager done');
@@ -5299,14 +5322,20 @@ if (!gotTheLock) {
     } catch (error) {
       console.error('[Main] initApp: skill services failed:', error);
     }
+    profiler.measure('skillServices');
+    profiler.measure('skillManager');
 
     // 设置安全策略
     setContentSecurityPolicy();
 
     // 创建窗口
+    profiler.mark('createWindow');
     console.log('[Main] initApp: creating window');
     createWindow();
+    profiler.measure('createWindow');
     console.log('[Main] initApp: window created');
+
+    console.log(profiler.summary());
 
     // Windows/Linux cold start: parse deep link from process.argv
     // Always buffer since renderer is not ready yet after createWindow()
