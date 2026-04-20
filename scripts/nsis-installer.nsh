@@ -20,8 +20,7 @@
   ; Stop-Process -Force is equivalent to taskkill /F — the processes have no
   ; chance to run before-quit cleanup, so file handles may linger briefly as
   ; "ghost handles" in the Windows kernel. We poll until no matching process
-  ; remains, then force-remove the old install directory so that the old
-  ; uninstaller (which may lack our customUnInit fix) is never invoked.
+  ; remains before proceeding.
 
   nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -Command "\
     Stop-Process -Name LobsterAI -Force -ErrorAction SilentlyContinue;\
@@ -37,8 +36,8 @@
 
   ; ── Backup user-created skills to AppData before extraction overwrites them ──
   ; Copy non-bundled skills to %APPDATA%\LobsterAI\skills-backup\ so they are
-  ; preserved regardless of whether the rename below succeeds or the old
-  ; uninstaller deletes $INSTDIR. The backup is restored in customInstall.
+  ; preserved when NSIS extracts the new version over the existing install.
+  ; The backup is restored in customInstall after extraction completes.
   nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -Command "\
     $$src    = [IO.Path]::Combine($\"$INSTDIR$\",  $\"resources$\", $\"SKILLs$\");\
     $$backup = [IO.Path]::Combine($\"$APPDATA$\", $\"LobsterAI$\", $\"skills-backup$\");\
@@ -59,30 +58,6 @@
       }\
     }"'
   Pop $0
-
-  ; ── Remove old installation directory ──
-  ; After all processes are gone, ghost file handles may still linger for a
-  ; few seconds. We must remove the old install directory — including the old
-  ; uninstaller exe — to prevent electron-builder from invoking it (which
-  ; lacks our customUnInit and would show an undismissable dialog).
-  ;
-  ; Strategy: rename $INSTDIR to a temp name (instant, even for thousands of
-  ; files). The actual deletion is deferred to customInstall.
-  ; User skills are already safe in the AppData backup above, so this rename
-  ; is best-effort: if it fails, skills are still restored from the backup.
-  IfFileExists "$INSTDIR.old\*.*" 0 SkipStaleOldDirCleanup
-    nsExec::ExecToLog 'cmd /c rd /s /q "$INSTDIR.old"'
-    Pop $0
-  SkipStaleOldDirCleanup:
-
-  IfFileExists "$INSTDIR\*.*" 0 SkipOldDirRemoval
-    Rename "$INSTDIR" "$INSTDIR.old"
-    IfErrors 0 RenameOK
-      Goto SkipOldDirRemoval
-    RenameOK:
-      ; Deletion is deferred to customInstall, after user-created skills are
-      ; copied back from $INSTDIR.old to the new $INSTDIR.
-  SkipOldDirRemoval:
 !macroend
 
 !macro customInstall
@@ -144,11 +119,6 @@
     ${GetTime} "" "L" $3 $4 $5 $6 $7 $8 $9
     FileWrite $2 "skill-restore-done: $5-$4-$3 $6:$7:$8 exit=$0$\r$\n"
   SkipSkillRestore:
-
-  ; ── Delete the old install directory if rename had succeeded ──
-  IfFileExists "$INSTDIR.old\*.*" 0 SkipOldDirCleanup
-    nsExec::Exec 'cmd /c rd /s /q "$INSTDIR.old"'
-  SkipOldDirCleanup:
 
   System::Call 'Kernel32::SetEnvironmentVariable(t "ELECTRON_RUN_AS_NODE", t "")i'
 
