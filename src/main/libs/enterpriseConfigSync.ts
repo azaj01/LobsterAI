@@ -228,7 +228,13 @@ function syncIMChannels(configPath: string, imStore: IMStore): void {
 
     // Use platform-specific setters so values are merged with defaults.
     const PLATFORM_SETTERS: Record<string, (cfg: any) => void> = {
-      'telegram': (cfg) => imStore.setTelegramOpenClawConfig(cfg),
+      'telegram': (cfg) => {
+        if (cfg && Array.isArray(cfg.instances)) {
+          imStore.setTelegramMultiInstanceConfig(cfg);
+          return;
+        }
+        imStore.setTelegramOpenClawConfig(cfg);
+      },
       'discord': (cfg) => imStore.setDiscordOpenClawConfig(cfg),
       'feishu': (cfg) => imStore.setFeishuOpenClawConfig(cfg),
       'dingtalk': (cfg) => imStore.setDingTalkOpenClawConfig(cfg),
