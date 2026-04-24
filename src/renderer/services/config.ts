@@ -115,6 +115,12 @@ const ADDED_PROVIDER_MODELS: Record<string, { models: Array<{ id: string; name: 
     ],
     position: 'start',
   },
+  moonshot: {
+    models: [
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true },
+    ],
+    position: 'start',
+  },
   minimax: {
     models: [
       { id: 'MiniMax-M2.7', name: 'MiniMax M2.7', supportsImage: false },

@@ -220,7 +220,10 @@ const PROVIDER_DEFINITIONS = [
     },
     region: 'china',
     enPriority: 0,
-    defaultModels: [{ id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true }],
+    defaultModels: [
+      { id: 'kimi-k2.6', name: 'Kimi K2.6', supportsImage: true },
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', supportsImage: true },
+    ],
     codingPlanModels: [{ id: 'kimi-for-coding', name: 'Kimi K2.5', supportsImage: true }],
   },
   {
