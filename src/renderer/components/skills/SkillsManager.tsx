@@ -190,7 +190,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   }, [selectedSkill, selectedMarketplaceSkill]);
 
   const filteredSkills = useMemo(() => {
-    const query = skillSearchQuery.toLowerCase();
+    const query = skillSearchQuery.trim().toLowerCase();
     return skills.filter(skill => {
       const matchesSearch = skill.name.toLowerCase().includes(query)
         || skillService.getLocalizedSkillDescription(skill.id, skill.name, skill.description).toLowerCase().includes(query);
@@ -199,7 +199,7 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   }, [skills, skillSearchQuery]);
 
   const filteredMarketplaceSkills = useMemo(() => {
-    const query = skillSearchQuery.toLowerCase();
+    const query = skillSearchQuery.trim().toLowerCase();
     let results = marketplaceSkills;
     if (query) {
       results = results.filter(skill => {
