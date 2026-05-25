@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('electron', {
     fetchMarketplace: () => ipcRenderer.invoke('skills:fetchMarketplace'),
     detectFromOpenClaw: () => ipcRenderer.invoke('skills:detectFromOpenClaw'),
     syncFromOpenClaw: () => ipcRenderer.invoke('skills:syncFromOpenClaw'),
+    refreshPluginSkillIds: () => ipcRenderer.invoke('skills:refreshPluginSkillIds'),
     onChanged: (callback: () => void) => {
       const handler = () => callback();
       ipcRenderer.on('skills:changed', handler);

@@ -108,6 +108,9 @@ const SkillsManager: React.FC<SkillsManagerProps> = ({ readOnly, onCreateByChat 
   useEffect(() => {
     let isActive = true;
     const loadSkills = async () => {
+      // Refresh plugin skill IDs from OpenClaw before loading skills,
+      // so that plugin-provided skills are correctly marked as built-in.
+      await window.electron?.skills.refreshPluginSkillIds().catch(() => {});
       const loadedSkills = await skillService.loadSkills();
       if (!isActive) return;
       dispatch(setSkills(loadedSkills));

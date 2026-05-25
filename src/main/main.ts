@@ -3898,6 +3898,17 @@ if (!gotTheLock) {
     }
   });
 
+  function updatePluginSkillIdsFromReport(sm: SkillManager, report: { skills: Array<{ source?: string; skillKey?: string; baseDir?: string }> }): void {
+    const pluginIds = new Set<string>();
+    for (const entry of report.skills ?? []) {
+      if (entry.source === 'openclaw-extra') {
+        const id = entry.skillKey || (entry.baseDir ? path.basename(entry.baseDir) : '');
+        if (id) pluginIds.add(id);
+      }
+    }
+    sm.setPluginSkillIds(pluginIds);
+  }
+
   ipcMain.handle('skills:detectFromOpenClaw', async () => {
     try {
       if (!openClawRuntimeAdapter) {
@@ -3910,6 +3921,7 @@ if (!gotTheLock) {
       }
       const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
       const sm = getSkillManager();
+      updatePluginSkillIdsFromReport(sm, report as any);
       return sm.detectSkillsFromOpenClaw(report as any);
     } catch (error) {
       return { skills: [], error: error instanceof Error ? error.message : 'Detection failed' };
@@ -3928,9 +3940,29 @@ if (!gotTheLock) {
       }
       const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
       const sm = getSkillManager();
+      updatePluginSkillIdsFromReport(sm, report as any);
       return sm.syncSkillsFromOpenClaw(report as any);
     } catch (error) {
       return { synced: [], error: error instanceof Error ? error.message : 'Sync failed' };
+    }
+  });
+
+  ipcMain.handle('skills:refreshPluginSkillIds', async () => {
+    try {
+      if (!openClawRuntimeAdapter) {
+        return { success: false, error: 'OpenClaw runtime not available' };
+      }
+      await openClawRuntimeAdapter.connectGatewayIfNeeded();
+      const client = openClawRuntimeAdapter.getGatewayClient();
+      if (!client) {
+        return { success: false, error: 'Gateway client not connected' };
+      }
+      const report = await client.request<{ skills: Array<Record<string, unknown>> }>('skills.status', {}, { timeoutMs: 10_000 });
+      const sm = getSkillManager();
+      updatePluginSkillIdsFromReport(sm, report as any);
+      return { success: true, pluginSkillIds: [...sm.getPluginSkillIds()] };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Refresh failed' };
     }
   });
 

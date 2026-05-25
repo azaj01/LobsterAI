@@ -336,6 +336,7 @@ interface IElectronAPI {
       error?: string;
     }>;
     syncFromOpenClaw: () => Promise<{ synced: string[]; error?: string }>;
+    refreshPluginSkillIds: () => Promise<{ success: boolean; pluginSkillIds?: string[]; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   };
   mcp: {

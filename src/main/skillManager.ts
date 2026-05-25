@@ -1335,8 +1335,21 @@ export class SkillManager {
   }>();
   private upgradingSkillIds = new Set<string>();
   private deletingSkillIds = new Set<string>();
+  private pluginSkillIds = new Set<string>();
 
   constructor(private getStore: () => SqliteStore) {}
+
+  /**
+   * Update the cached set of plugin-provided skill IDs (from OpenClaw plugins).
+   * These skills are treated as built-in and cannot be deleted by the user.
+   */
+  setPluginSkillIds(ids: Set<string>): void {
+    this.pluginSkillIds = ids;
+  }
+
+  getPluginSkillIds(): Set<string> {
+    return this.pluginSkillIds;
+  }
 
   getSkillsRoot(): string {
     return path.resolve(app.getPath('userData'), SKILLS_DIR_NAME);
@@ -1580,7 +1593,7 @@ export class SkillManager {
       if (!fs.existsSync(root)) return;
       const skillDirs = listSkillDirs(root);
       skillDirs.forEach(dir => {
-        const skill = this.parseSkillDir(dir, state, defaults, builtInSkillIds.has(path.basename(dir)));
+        const skill = this.parseSkillDir(dir, state, defaults, builtInSkillIds.has(path.basename(dir)) || this.pluginSkillIds.has(path.basename(dir)));
         if (!skill) return;
         skillMap.set(skill.id, skill);
       });
@@ -1640,7 +1653,8 @@ export class SkillManager {
       const skillsRoot = this.getSkillsRoot();
 
       const newSkills = report.skills.filter(entry => {
-        if (entry.bundled) return false;
+        // Skip bundled skills and plugin-provided skills (e.g. moltbot/POPO plugins)
+        if (entry.bundled || entry.source === 'openclaw-extra') return false;
         const normalizedBaseDir = path.resolve(entry.baseDir);
         const normalizedRoot = path.resolve(skillsRoot);
         if (normalizedBaseDir.startsWith(normalizedRoot)) return false;
@@ -2436,7 +2450,7 @@ export class SkillManager {
   }
 
   private isBuiltInSkillId(id: string): boolean {
-    return this.listBuiltInSkillIds().has(id);
+    return this.listBuiltInSkillIds().has(id) || this.pluginSkillIds.has(id);
   }
 
   private loadSkillStateMap(): SkillStateMap {
