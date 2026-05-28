@@ -1,5 +1,5 @@
 import { ArrowPathIcon, Cog6ToothIcon,PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
-import { useCallback, useEffect, useRef,useState } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef,useState } from 'react';
 
 import { i18nService } from '../../services/i18n';
 import PluginConfigPage from './PluginConfigPage';
@@ -23,9 +23,28 @@ interface InstallForm {
   version: string;
 }
 
-export default function PluginsSettings() {
+export interface PluginPendingChanges {
+  toggles: Array<{ pluginId: string; enabled: boolean }>;
+  configs: Array<{ pluginId: string; config: Record<string, unknown> }>;
+}
+
+export interface PluginsSettingsHandle {
+  getPendingChanges: () => PluginPendingChanges | null;
+  resetDirty: () => void;
+  /** Returns true if leave is blocked (dialog shown). Caller should abort navigation. */
+  guardLeave: (proceedAction: () => void) => boolean;
+}
+
+interface PluginsSettingsProps {
+  handleRef?: React.Ref<PluginsSettingsHandle>;
+}
+
+export default function PluginsSettings({ handleRef }: PluginsSettingsProps) {
   const [plugins, setPlugins] = useState<PluginListItem[]>([]);
   const [loading, setLoading] = useState(true);
+  // --- Unsaved-changes guard (internal dialog) ---
+  const [showUnsavedConfirm, setShowUnsavedConfirm] = useState(false);
+  const pendingLeaveActionRef = useRef<(() => void) | null>(null);
   const [showInstallModal, setShowInstallModal] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
@@ -44,10 +63,82 @@ export default function PluginsSettings() {
     version: '',
   });
 
+  // --- Deferred save: track initial state and pending changes ---
+  const initialPluginsRef = useRef<Map<string, boolean>>(new Map());
+  const [pendingToggles, setPendingToggles] = useState<Map<string, boolean>>(new Map());
+  const [pendingConfigs, setPendingConfigs] = useState<Map<string, Record<string, unknown>>>(new Map());
+  // Store initial configs loaded from IPC for dirty comparison
+  const initialConfigsRef = useRef<Map<string, Record<string, unknown>>>(new Map());
+
+  // Compute dirty state
+  const isDirty = useCallback((): boolean => {
+    // Check toggles: compare current state against initial
+    for (const [pluginId, enabled] of pendingToggles) {
+      const initialEnabled = initialPluginsRef.current.get(pluginId);
+      if (initialEnabled !== enabled) return true;
+    }
+    // Check configs
+    for (const [pluginId, config] of pendingConfigs) {
+      const initialConfig = initialConfigsRef.current.get(pluginId);
+      if (JSON.stringify(config) !== JSON.stringify(initialConfig ?? {})) return true;
+    }
+    return false;
+  }, [pendingToggles, pendingConfigs]);
+
+  // Expose handle to parent
+  useImperativeHandle(handleRef, () => ({
+    getPendingChanges: (): PluginPendingChanges | null => {
+      const dirty = isDirty();
+      if (!dirty) return null;
+
+      const toggles: PluginPendingChanges['toggles'] = [];
+      for (const [pluginId, enabled] of pendingToggles) {
+        const initialEnabled = initialPluginsRef.current.get(pluginId);
+        if (initialEnabled !== enabled) {
+          toggles.push({ pluginId, enabled });
+        }
+      }
+
+      const configs: PluginPendingChanges['configs'] = [];
+      for (const [pluginId, config] of pendingConfigs) {
+        const initialConfig = initialConfigsRef.current.get(pluginId);
+        if (JSON.stringify(config) !== JSON.stringify(initialConfig ?? {})) {
+          configs.push({ pluginId, config });
+        }
+      }
+
+      if (toggles.length === 0 && configs.length === 0) return null;
+      return { toggles, configs };
+    },
+    resetDirty: () => {
+      // Update initial refs to reflect current state after save
+      for (const [pluginId, enabled] of pendingToggles) {
+        initialPluginsRef.current.set(pluginId, enabled);
+      }
+      for (const [pluginId, config] of pendingConfigs) {
+        initialConfigsRef.current.set(pluginId, config);
+      }
+      setPendingToggles(new Map());
+      setPendingConfigs(new Map());
+    },
+    guardLeave: (proceedAction: () => void): boolean => {
+      if (!isDirty()) return false;
+      pendingLeaveActionRef.current = proceedAction;
+      setShowUnsavedConfirm(true);
+      return true;
+    },
+  }), [isDirty, pendingToggles, pendingConfigs]);
+
   const loadPlugins = useCallback(async () => {
     const result = await window.electron?.plugins.list();
     if (result?.success && result.plugins) {
       setPlugins(result.plugins);
+      // Snapshot initial enabled state
+      const initial = new Map<string, boolean>();
+      for (const p of result.plugins) {
+        initial.set(p.pluginId, p.enabled);
+      }
+      initialPluginsRef.current = initial;
     }
     setLoading(false);
   }, []);
@@ -106,11 +197,16 @@ export default function PluginsSettings() {
     return cleanup;
   }, [installing]);
 
-  const handleToggle = async (pluginId: string, enabled: boolean) => {
-    await window.electron?.plugins.setEnabled(pluginId, enabled);
+  const handleToggle = (pluginId: string, enabled: boolean) => {
+    // Only update local state — do NOT call IPC
     setPlugins(prev =>
       prev.map(p => p.pluginId === pluginId ? { ...p, enabled } : p),
     );
+    setPendingToggles(prev => {
+      const next = new Map(prev);
+      next.set(pluginId, enabled);
+      return next;
+    });
   };
 
   const handleUninstall = async (pluginId: string) => {
@@ -119,6 +215,19 @@ export default function PluginsSettings() {
     setUninstalling(false);
     if (result?.ok) {
       setPlugins(prev => prev.filter(p => p.pluginId !== pluginId));
+      // Remove from pending state and initial ref
+      initialPluginsRef.current.delete(pluginId);
+      setPendingToggles(prev => {
+        const next = new Map(prev);
+        next.delete(pluginId);
+        return next;
+      });
+      setPendingConfigs(prev => {
+        const next = new Map(prev);
+        next.delete(pluginId);
+        return next;
+      });
+      initialConfigsRef.current.delete(pluginId);
     }
     setConfirmUninstall(null);
   };
@@ -158,6 +267,21 @@ export default function PluginsSettings() {
     }
   };
 
+  const handleConfigChange = useCallback((pluginId: string, config: Record<string, unknown>) => {
+    setPendingConfigs(prev => {
+      const next = new Map(prev);
+      next.set(pluginId, config);
+      return next;
+    });
+  }, []);
+
+  const handleConfigLoaded = useCallback((pluginId: string, config: Record<string, unknown>) => {
+    // Store initial config for dirty comparison (only if not already stored)
+    if (!initialConfigsRef.current.has(pluginId)) {
+      initialConfigsRef.current.set(pluginId, config);
+    }
+  }, []);
+
   const sourceLabel = (source: PluginSource | 'bundled') => {
     switch (source) {
       case 'npm': return i18nService.t('pluginsSourceNpm');
@@ -175,6 +299,9 @@ export default function PluginsSettings() {
       <PluginConfigPage
         pluginId={configPluginId}
         onBack={() => setConfigPluginId(null)}
+        initialConfig={pendingConfigs.get(configPluginId)}
+        onConfigChange={handleConfigChange}
+        onConfigLoaded={handleConfigLoaded}
       />
     );
   }
@@ -593,6 +720,47 @@ export default function PluginsSettings() {
                 className="px-4 py-2 text-sm rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {uninstalling ? i18nService.t('pluginsUninstalling') : i18nService.t('pluginsUninstall')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unsaved changes confirmation dialog */}
+      {showUnsavedConfirm && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/35 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-background border border-border shadow-modal p-5">
+            <h4 className="text-sm font-semibold text-foreground mb-2">
+              {i18nService.t('pluginsUnsavedTitle')}
+            </h4>
+            <p className="text-sm text-secondary mb-4">
+              {i18nService.t('pluginsUnsavedMessage')}
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUnsavedConfirm(false);
+                  pendingLeaveActionRef.current = null;
+                }}
+                className="px-4 py-2 text-sm font-medium rounded-lg text-secondary hover:bg-surface-raised transition-colors"
+              >
+                {i18nService.t('pluginsUnsavedStay')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUnsavedConfirm(false);
+                  // Reset dirty state so subsequent navigation is not blocked
+                  setPendingToggles(new Map());
+                  setPendingConfigs(new Map());
+                  const action = pendingLeaveActionRef.current;
+                  pendingLeaveActionRef.current = null;
+                  action?.();
+                }}
+                className="px-4 py-2 text-sm font-medium rounded-lg bg-destructive text-destructive-foreground hover:opacity-90 transition-opacity"
+              >
+                {i18nService.t('pluginsUnsavedDiscard')}
               </button>
             </div>
           </div>
