@@ -1,3 +1,5 @@
+import Database from 'better-sqlite3';
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -16,6 +18,32 @@ const PENDING_RESTORE_FILE_NAME = '.lobsterai-data-migration-restore-pending.jso
 const LAST_RESTORE_RESULT_FILE_NAME = '.lobsterai-data-migration-restore-result.json';
 const ARCHIVE_FORMAT = 'lobsterai-user-data';
 const ARCHIVE_FORMAT_VERSION = 1;
+
+const SQLITE_MIGRATION_TABLES = [
+  'kv',
+  'cowork_sessions',
+  'cowork_messages',
+  'cowork_config',
+  'agents',
+  'mcp_servers',
+  'mcp_launch_resolutions',
+  'user_plugins',
+  'user_memories',
+  'user_memory_sources',
+  'subagent_runs',
+  'subagent_messages',
+  'im_config',
+  'im_session_mappings',
+] as const;
+
+const SQLITE_MIGRATION_KV_KEYS = [
+  'auth_tokens',
+  'auth_user',
+  'app_config',
+  'skills_state',
+  'openclaw_session_policy',
+  'installation_uuid',
+] as const;
 
 const EXCLUDED_TOP_LEVEL_NAMES = new Set([
   'Cache',
@@ -85,6 +113,16 @@ export interface PerformDataMigrationRestoreInput extends PerformPendingDataMigr
   archivePath: string;
 }
 
+interface SqliteMigrationSummary {
+  exists: boolean;
+  sizeBytes?: number;
+  checksumSha256?: string;
+  quickCheck?: string;
+  rowCounts?: Record<string, number>;
+  kvKeys?: string[];
+  error?: string;
+}
+
 const pad = (value: number, width = 2): string => String(value).padStart(width, '0');
 
 export const formatDataMigrationTimestamp = (date = new Date()): string => (
@@ -152,6 +190,12 @@ const removeDirIfExistsSync = (dirPath: string): void => {
   fs.rmSync(dirPath, { recursive: true, force: true });
 };
 
+const computeFileSha256Sync = (filePath: string): string => {
+  const hash = crypto.createHash('sha256');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('hex');
+};
+
 const copyFileSync = (sourcePath: string, targetPath: string): void => {
   ensureDirSync(path.dirname(targetPath));
   fs.copyFileSync(sourcePath, targetPath);
@@ -200,8 +244,56 @@ const readJsonFileSync = <T>(filePath: string): T | null => {
   }
 };
 
+const tableExists = (db: Database.Database, tableName: string): boolean => {
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(tableName);
+  return Boolean(row);
+};
+
+const readSqliteMigrationSummarySync = (dbPath: string): SqliteMigrationSummary => {
+  if (!fs.existsSync(dbPath)) return { exists: false };
+  const stat = fs.statSync(dbPath);
+  let db: Database.Database | null = null;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const quickCheck = String(db.prepare('PRAGMA quick_check').pluck().get() ?? '');
+    const rowCounts: Record<string, number> = {};
+    for (const tableName of SQLITE_MIGRATION_TABLES) {
+      if (!tableExists(db, tableName)) continue;
+      const count = db.prepare(`SELECT COUNT(*) FROM "${tableName}"`).pluck().get() as number;
+      rowCounts[tableName] = Number(count) || 0;
+    }
+
+    const kvKeys = tableExists(db, 'kv')
+      ? SQLITE_MIGRATION_KV_KEYS.filter((key) => {
+        const row = db?.prepare('SELECT key FROM kv WHERE key = ?').get(key);
+        return Boolean(row);
+      })
+      : [];
+
+    return {
+      exists: true,
+      sizeBytes: stat.size,
+      checksumSha256: computeFileSha256Sync(dbPath),
+      quickCheck,
+      rowCounts,
+      kvKeys,
+    };
+  } catch (error) {
+    return {
+      exists: true,
+      sizeBytes: stat.size,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    db?.close();
+  }
+};
+
 const buildManifest = (input: CreateMigrationArchiveInput): Record<string, unknown> => {
   const now = input.now ?? new Date();
+  const sqliteSourcePath = input.sqliteSnapshotPath
+    ? resolvePath(input.sqliteSnapshotPath)
+    : path.join(resolvePath(input.userDataPath), DB_FILENAME);
   return {
     format: ARCHIVE_FORMAT,
     version: ARCHIVE_FORMAT_VERSION,
@@ -214,6 +306,7 @@ const buildManifest = (input: CreateMigrationArchiveInput): Record<string, unkno
     includesWorkingDirectories: false,
     excludedTopLevelNames: [...EXCLUDED_TOP_LEVEL_NAMES].sort(),
     excludedTopLevelPrefixes: [...EXCLUDED_TOP_LEVEL_PREFIXES].sort(),
+    sqlite: readSqliteMigrationSummarySync(sqliteSourcePath),
   };
 };
 
@@ -456,6 +549,49 @@ const replaceRestorableUserDataSync = (sourceRoot: string, userDataPath: string)
   copyDirectorySync(sourceRoot, userDataPath);
 };
 
+const assertSqliteRestoredSync = (sourceRoot: string, userDataPath: string): void => {
+  const sourceSummary = readSqliteMigrationSummarySync(path.join(sourceRoot, DB_FILENAME));
+  if (!sourceSummary.exists) {
+    throw new Error(`Backup archive is missing ${DB_FILENAME}.`);
+  }
+  if (sourceSummary.error) {
+    throw new Error(`Backup archive contains an unreadable ${DB_FILENAME}: ${sourceSummary.error}`);
+  }
+  if (sourceSummary.quickCheck !== 'ok') {
+    throw new Error(`Backup archive ${DB_FILENAME} failed quick_check: ${sourceSummary.quickCheck || 'empty result'}`);
+  }
+
+  const targetSummary = readSqliteMigrationSummarySync(path.join(userDataPath, DB_FILENAME));
+  if (!targetSummary.exists) {
+    throw new Error(`Restored ${DB_FILENAME} is missing.`);
+  }
+  if (targetSummary.error) {
+    throw new Error(`Restored ${DB_FILENAME} is unreadable: ${targetSummary.error}`);
+  }
+  if (targetSummary.quickCheck !== 'ok') {
+    throw new Error(`Restored ${DB_FILENAME} failed quick_check: ${targetSummary.quickCheck || 'empty result'}`);
+  }
+  if (sourceSummary.checksumSha256 !== targetSummary.checksumSha256) {
+    throw new Error(`Restored ${DB_FILENAME} checksum does not match the backup archive.`);
+  }
+
+  for (const tableName of SQLITE_MIGRATION_TABLES) {
+    const sourceCount = sourceSummary.rowCounts?.[tableName] ?? 0;
+    const targetCount = targetSummary.rowCounts?.[tableName] ?? 0;
+    if (sourceCount !== targetCount) {
+      throw new Error(
+        `Restored ${DB_FILENAME} row count mismatch for ${tableName}: expected ${sourceCount}, got ${targetCount}.`,
+      );
+    }
+  }
+
+  for (const key of sourceSummary.kvKeys ?? []) {
+    if (!targetSummary.kvKeys?.includes(key)) {
+      throw new Error(`Restored ${DB_FILENAME} is missing required kv key ${key}.`);
+    }
+  }
+};
+
 const restoreRollbackArchiveSync = (rollbackPath: string, userDataPath: string): void => {
   const rollback = extractMigrationArchiveToTempSync(rollbackPath);
   try {
@@ -493,6 +629,7 @@ export const performDataMigrationRestoreSync = (
 
     targetWasTouched = true;
     replaceRestorableUserDataSync(extracted.sourceRoot, input.userDataPath);
+    assertSqliteRestoredSync(extracted.sourceRoot, input.userDataPath);
 
     const result: DataMigrationLastRestoreResult = {
       status: DataMigrationRestoreStatus.Success,

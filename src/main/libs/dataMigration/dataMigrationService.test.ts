@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -26,6 +27,73 @@ const writeFile = (filePath: string, content: string): void => {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf8');
 };
+
+const writeSqliteFixture = (dbPath: string, label: string): void => {
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  fs.rmSync(dbPath, { force: true });
+
+  const db = new Database(dbPath);
+  try {
+    db.exec(`
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE cowork_sessions (id TEXT PRIMARY KEY);
+      CREATE TABLE cowork_messages (id TEXT PRIMARY KEY);
+      CREATE TABLE cowork_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE agents (id TEXT PRIMARY KEY);
+      CREATE TABLE mcp_servers (id TEXT PRIMARY KEY);
+      CREATE TABLE mcp_launch_resolutions (server_id TEXT PRIMARY KEY);
+      CREATE TABLE user_plugins (plugin_id TEXT PRIMARY KEY);
+      CREATE TABLE user_memories (id TEXT PRIMARY KEY);
+      CREATE TABLE user_memory_sources (id TEXT PRIMARY KEY);
+      CREATE TABLE subagent_runs (id TEXT PRIMARY KEY);
+      CREATE TABLE subagent_messages (id TEXT PRIMARY KEY);
+      CREATE TABLE im_config (key TEXT PRIMARY KEY);
+      CREATE TABLE im_session_mappings (im_conversation_id TEXT NOT NULL, platform TEXT NOT NULL, PRIMARY KEY (im_conversation_id, platform));
+    `);
+
+    const now = Date.now();
+    const insertKv = db.prepare('INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?)');
+    insertKv.run('auth_tokens', JSON.stringify({ accessToken: `${label}-access`, refreshToken: `${label}-refresh` }), now);
+    insertKv.run('auth_user', JSON.stringify({ id: `${label}-user` }), now);
+    insertKv.run('app_config', JSON.stringify({ providers: { custom: { models: [`${label}-model`] } } }), now);
+    insertKv.run('skills_state', JSON.stringify({ [`${label}-skill`]: { enabled: true } }), now);
+    insertKv.run('openclaw_session_policy', JSON.stringify({ mode: label }), now);
+    insertKv.run('installation_uuid', JSON.stringify(`${label}-install`), now);
+
+    db.prepare('INSERT INTO cowork_sessions (id) VALUES (?)').run(`${label}-session`);
+    db.prepare('INSERT INTO cowork_messages (id) VALUES (?)').run(`${label}-message`);
+    db.prepare('INSERT INTO cowork_config (key, value, updated_at) VALUES (?, ?, ?)').run('workingDirectory', label, now);
+    db.prepare('INSERT INTO agents (id) VALUES (?)').run(`${label}-agent`);
+    db.prepare('INSERT INTO mcp_servers (id) VALUES (?)').run(`${label}-mcp`);
+    db.prepare('INSERT INTO mcp_launch_resolutions (server_id) VALUES (?)').run(`${label}-mcp`);
+    db.prepare('INSERT INTO user_plugins (plugin_id) VALUES (?)').run(`${label}-plugin`);
+    db.prepare('INSERT INTO user_memories (id) VALUES (?)').run(`${label}-memory`);
+    db.prepare('INSERT INTO user_memory_sources (id) VALUES (?)').run(`${label}-memory-source`);
+    db.prepare('INSERT INTO subagent_runs (id) VALUES (?)').run(`${label}-subagent`);
+    db.prepare('INSERT INTO subagent_messages (id) VALUES (?)').run(`${label}-subagent-message`);
+    db.prepare('INSERT INTO im_config (key) VALUES (?)').run(`${label}-im`);
+    db.prepare('INSERT INTO im_session_mappings (im_conversation_id, platform) VALUES (?, ?)').run(`${label}-conversation`, 'telegram');
+  } finally {
+    db.close();
+  }
+};
+
+const readSqliteValue = (dbPath: string, sql: string, params: unknown[] = []): unknown => {
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(sql).pluck().get(...params);
+  } finally {
+    db.close();
+  }
+};
+
+const readSqliteString = (dbPath: string, sql: string, params: unknown[] = []): string => (
+  String(readSqliteValue(dbPath, sql, params) ?? '')
+);
+
+const readSqliteCount = (dbPath: string, tableName: string): number => (
+  Number(readSqliteValue(dbPath, `SELECT COUNT(*) FROM "${tableName}"`) ?? 0)
+);
 
 const listArchiveEntries = (archivePath: string): string[] => {
   const entries: string[] = [];
@@ -148,9 +216,9 @@ test('performPendingDataMigrationRestoreSync creates rollback and restores backu
   const rollbackRoot = path.join(root, 'rollbacks');
   const archivePath = path.join(root, 'source-backup.tar.gz');
 
-  writeFile(path.join(sourceUserData, DB_FILENAME), 'source-db');
+  writeSqliteFixture(path.join(sourceUserData, DB_FILENAME), 'source');
   writeFile(path.join(sourceUserData, 'SKILLs', 'demo', 'SKILL.md'), '# Demo');
-  writeFile(path.join(targetUserData, DB_FILENAME), 'target-db');
+  writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
 
   createMigrationArchiveSync({ userDataPath: sourceUserData, outputPath: archivePath });
   writePendingRestoreRequestSync(targetUserData, archivePath);
@@ -164,7 +232,13 @@ test('performPendingDataMigrationRestoreSync creates rollback and restores backu
   expect(result?.status).toBe(DataMigrationRestoreStatus.Success);
   expect(result?.rollbackPath).toBeTruthy();
   expect(fs.existsSync(result?.rollbackPath || '')).toBe(true);
-  expect(fs.readFileSync(path.join(targetUserData, DB_FILENAME), 'utf8')).toBe('source-db');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
+    .toContain('source-refresh');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT id FROM cowork_sessions')).toBe('source-session');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT id FROM agents')).toBe('source-agent');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT id FROM mcp_servers')).toBe('source-mcp');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT plugin_id FROM user_plugins')).toBe('source-plugin');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT key FROM im_config')).toBe('source-im');
   expect(fs.readFileSync(path.join(targetUserData, 'SKILLs', 'demo', 'SKILL.md'), 'utf8')).toBe('# Demo');
 });
 
@@ -175,8 +249,8 @@ test('performDataMigrationRestoreSync restores backup data without a pending mar
   const rollbackRoot = path.join(root, 'rollbacks');
   const archivePath = path.join(root, 'source-backup.tar.gz');
 
-  writeFile(path.join(sourceUserData, DB_FILENAME), 'source-db');
-  writeFile(path.join(targetUserData, DB_FILENAME), 'target-db');
+  writeSqliteFixture(path.join(sourceUserData, DB_FILENAME), 'source');
+  writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
 
   createMigrationArchiveSync({ userDataPath: sourceUserData, outputPath: archivePath });
 
@@ -188,7 +262,10 @@ test('performDataMigrationRestoreSync restores backup data without a pending mar
   });
 
   expect(result?.status).toBe(DataMigrationRestoreStatus.Success);
-  expect(fs.readFileSync(path.join(targetUserData, DB_FILENAME), 'utf8')).toBe('source-db');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['app_config']))
+    .toContain('source-model');
+  expect(readSqliteCount(path.join(targetUserData, DB_FILENAME), 'subagent_runs')).toBe(1);
+  expect(readSqliteCount(path.join(targetUserData, DB_FILENAME), 'user_memory_sources')).toBe(1);
 });
 
 test('performPendingDataMigrationRestoreSync replaces data in place and preserves runtime locks', () => {
@@ -198,9 +275,9 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   const rollbackRoot = path.join(root, 'rollbacks');
   const archivePath = path.join(root, 'source-backup.tar.gz');
 
-  writeFile(path.join(sourceUserData, DB_FILENAME), 'source-db');
+  writeSqliteFixture(path.join(sourceUserData, DB_FILENAME), 'source');
   writeFile(path.join(sourceUserData, 'openclaw', 'state', 'openclaw.json'), '{"source":true}');
-  writeFile(path.join(targetUserData, DB_FILENAME), 'target-db');
+  writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
   writeFile(path.join(targetUserData, 'old-only.txt'), 'old');
   writeFile(path.join(targetUserData, 'Network', 'Cookies'), 'runtime-cookies');
   writeFile(path.join(targetUserData, 'SingletonLock'), 'runtime-lock');
@@ -215,7 +292,8 @@ test('performPendingDataMigrationRestoreSync replaces data in place and preserve
   });
 
   expect(result?.status).toBe(DataMigrationRestoreStatus.Success);
-  expect(fs.readFileSync(path.join(targetUserData, DB_FILENAME), 'utf8')).toBe('source-db');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
+    .toContain('source-refresh');
   expect(fs.readFileSync(path.join(targetUserData, 'openclaw', 'state', 'openclaw.json'), 'utf8')).toBe('{"source":true}');
   expect(fs.existsSync(path.join(targetUserData, 'old-only.txt'))).toBe(false);
   expect(fs.readFileSync(path.join(targetUserData, 'Network', 'Cookies'), 'utf8')).toBe('runtime-cookies');
@@ -228,7 +306,7 @@ test('performPendingDataMigrationRestoreSync keeps existing data when restore fa
   const rollbackRoot = path.join(root, 'rollbacks');
   const archivePath = path.join(root, 'missing-backup.tar.gz');
 
-  writeFile(path.join(targetUserData, DB_FILENAME), 'target-db');
+  writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
   writePendingRestoreRequestSync(targetUserData, archivePath);
 
   const result = performPendingDataMigrationRestoreSync({
@@ -238,5 +316,32 @@ test('performPendingDataMigrationRestoreSync keeps existing data when restore fa
   });
 
   expect(result?.status).toBe(DataMigrationRestoreStatus.Failed);
-  expect(fs.readFileSync(path.join(targetUserData, DB_FILENAME), 'utf8')).toBe('target-db');
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
+    .toContain('target-refresh');
+});
+
+test('performDataMigrationRestoreSync rolls back when the backup is missing sqlite data', () => {
+  const root = makeTempDir();
+  const sourceUserData = path.join(root, 'source', 'LobsterAI');
+  const targetUserData = path.join(root, 'target', 'LobsterAI');
+  const rollbackRoot = path.join(root, 'rollbacks');
+  const archivePath = path.join(root, 'source-backup.tar.gz');
+
+  writeFile(path.join(sourceUserData, 'SKILLs', 'demo', 'SKILL.md'), '# Demo');
+  writeSqliteFixture(path.join(targetUserData, DB_FILENAME), 'target');
+
+  createMigrationArchiveSync({ userDataPath: sourceUserData, outputPath: archivePath });
+
+  const result = performDataMigrationRestoreSync({
+    userDataPath: targetUserData,
+    rollbackRootPath: rollbackRoot,
+    archivePath,
+    now: new Date('2026-06-08T01:02:03Z'),
+  });
+
+  expect(result?.status).toBe(DataMigrationRestoreStatus.Failed);
+  expect(result?.error).toContain(`missing ${DB_FILENAME}`);
+  expect(readSqliteString(path.join(targetUserData, DB_FILENAME), 'SELECT value FROM kv WHERE key = ?', ['auth_tokens']))
+    .toContain('target-refresh');
+  expect(fs.existsSync(path.join(targetUserData, 'SKILLs', 'demo', 'SKILL.md'))).toBe(false);
 });
